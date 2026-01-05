@@ -24,6 +24,7 @@ class FieldSpec:
     is_timestamp: bool = False
     is_date: bool = False
     numeric_constraint: str | None = None  # positive, non_negative, finite
+    as_iso_date_str: bool = False
 
 
 @dataclass(frozen=True)
@@ -105,7 +106,7 @@ CANONICAL_SCHEMAS: Dict[str, CanonicalSchema] = {
         "fundamentals",
         {
             "symbol": FieldSpec((str,)),
-            "report_date": FieldSpec((date,), is_date=True),
+            "report_date": FieldSpec((str,), is_date=True, as_iso_date_str=True),
             "fiscal_period": FieldSpec((str,)),
             "revenue": FieldSpec((numbers.Real,), numeric_constraint="finite"),
             "net_income": FieldSpec((numbers.Real,), numeric_constraint="finite"),

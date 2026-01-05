@@ -6,8 +6,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, Sequence
 
+from infra.paths import validation_manifest_root
 
-DEFAULT_MANIFEST_DIR = Path("data/validation/manifests")
+DEFAULT_MANIFEST_DIR = validation_manifest_root()
 
 
 def build_manifest(

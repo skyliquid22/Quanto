@@ -185,7 +185,7 @@ def test_fundamentals_require_finite_values(tmp_path):
     records = [
         {
             "symbol": "AAPL",
-            "report_date": datetime(2023, 12, 31, tzinfo=timezone.utc),
+            "report_date": "2023-12-31",
             "fiscal_period": "FY23",
             "revenue": float("nan"),
             "net_income": 1.0,

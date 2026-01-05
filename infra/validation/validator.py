@@ -136,7 +136,7 @@ class Validator:
         if spec.is_timestamp:
             return self._normalize_timestamp(field_name, value)
         if spec.is_date:
-            return self._normalize_date(field_name, value)
+            return self._normalize_date(field_name, value, spec)
 
         if not self._matches_dtype(value, spec.dtype):
             raise RecordValidationError(
@@ -158,19 +158,22 @@ class Validator:
             dt = dt.replace(tzinfo=UTC)
         return dt.astimezone(UTC)
 
-    def _normalize_date(self, field_name: str, value: Any) -> date:
+    def _normalize_date(self, field_name: str, value: Any, spec: FieldSpec) -> Any:
         if isinstance(value, datetime):
-            return value.astimezone(UTC).date()
-        if isinstance(value, date):
-            return value
-        if isinstance(value, str):
+            coerced = value.astimezone(UTC).date()
+        elif isinstance(value, date):
+            coerced = value
+        elif isinstance(value, str):
             try:
-                return date.fromisoformat(value)
+                coerced = date.fromisoformat(value)
             except ValueError as exc:  # pragma: no cover - defensive
                 raise RecordValidationError(
                     f"Field '{field_name}' must be ISO formatted YYYY-MM-DD"
                 ) from exc
-        raise RecordValidationError(f"Field '{field_name}' must be a date value")
+        else:
+            raise RecordValidationError(f"Field '{field_name}' must be a date value")
+
+        return coerced.isoformat() if spec.as_iso_date_str else coerced
 
     def _coerce_datetime(self, value: Any, field_name: str) -> datetime:
         if isinstance(value, datetime):

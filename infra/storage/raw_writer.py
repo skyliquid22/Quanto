@@ -182,4 +182,66 @@ def _coerce_date(value: object, index: int | None = None) -> date:
     raise TypeError(f"snapshot_date must be a date{position}")
 
 
-__all__ = ["RawEquityOHLCVWriter", "RawOptionsWriter"]
+class RawFundamentalsWriter:
+    """Writes fundamentals statements partitioned by report date."""
+
+    def __init__(self, base_path: Path | str | None = None) -> None:
+        resolved = base_path if base_path is not None else raw_root()
+        self.base_path = Path(resolved)
+
+    def write_records(
+        self,
+        vendor: str,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        grouped: MutableMapping[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
+        for index, record in enumerate(records):
+            symbol = str(record["symbol"])
+            iso_date = _coerce_date(record.get("report_date"), index).isoformat()
+            grouped[(symbol, iso_date)].append(record)
+
+        file_details = []
+        for (symbol, iso_date), items in grouped.items():
+            prepared = []
+            deduped: dict[tuple[str, str, str, str], dict[str, object]] = {}
+            for entry in items:
+                normalized = dict(entry)
+                normalized_symbol = str(normalized["symbol"])
+                normalized["symbol"] = normalized_symbol
+                normalized_date = _coerce_date(normalized["report_date"]).isoformat()
+                normalized["report_date"] = normalized_date
+                fiscal_period = str(normalized.get("fiscal_period") or "")
+                normalized["fiscal_period"] = fiscal_period
+                vendor_field = str(normalized.get("source_vendor") or vendor)
+                normalized["source_vendor"] = vendor_field
+                key = (normalized_symbol, normalized_date, fiscal_period, vendor_field)
+                existing = deduped.get(key)
+                if existing:
+                    if existing != normalized:
+                        raise ValueError(
+                            f"Conflicting fundamentals record for {key}"
+                        )
+                    continue
+                deduped[key] = normalized
+
+            ordered = sorted(
+                deduped.values(),
+                key=lambda rec: (
+                    rec["fiscal_period"],
+                    str(rec.get("filing_id") or ""),
+                    rec["source_vendor"],
+                ),
+            )
+            prepared.extend(ordered)
+            path = self._resolve_path(vendor, symbol, iso_date)
+            result = write_parquet_atomic(prepared, path)
+            file_details.append({"path": str(path), "hash": result["file_hash"], "records": len(prepared)})
+
+        return {"files": file_details, "total_files": len(file_details)}
+
+    def _resolve_path(self, vendor: str, symbol: str, iso_date: str) -> Path:
+        year, month, day = iso_date.split("-")
+        return self.base_path / vendor / "fundamentals" / symbol / year / month / f"{day}.parquet"
+
+
+__all__ = ["RawEquityOHLCVWriter", "RawFundamentalsWriter", "RawOptionsWriter"]
