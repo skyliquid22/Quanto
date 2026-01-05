@@ -1,0 +1,19 @@
+{
+  "offline_ingestion": {
+    "vendor": "polygon",
+    "symbols": ["AAPL", "MSFT"],
+    "start_date": "2023-01-03",
+    "end_date": "2023-01-05",
+    "base_price": 120.0,
+    "price_increment": 1.75,
+    "base_volume": 1500,
+    "volume_increment": 40
+  },
+  "canonical": {
+    "config_path": "configs/data_sources.json",
+    "domains": ["equity_ohlcv"]
+  },
+  "reporting": {
+    "plot_symbol": "AAPL"
+  }
+}

@@ -20,7 +20,13 @@ except Exception:  # pragma: no cover - keep tests lightweight
 from .lineage import LineageInput, LineageOutput, build_lineage_payload, compute_file_hash
 
 UTC = timezone.utc
-_CANONICAL_OPTIONS_DOMAINS = {
+_OPTION_DOMAIN_DIRS = {
+    "option_contract_reference": "option_contract_reference",
+    "option_contract_ohlcv": "option_contract_ohlcv",
+    "option_open_interest": "option_open_interest",
+}
+
+_LEGACY_OPTIONS_DOMAINS = {
     "options_reference": "option_contract_reference",
     "options_ohlcv": "option_contract_ohlcv",
     "options_oi": "option_open_interest",
@@ -107,6 +113,13 @@ class ReconciliationBuilder:
         if not domain_cfg:
             raise ValueError("No reconciliation domains configured")
         self.domain_configs: Dict[str, Dict[str, Any]] = {str(k): dict(v) for k, v in domain_cfg.items()}
+        legacy_domains = sorted(name for name in self.domain_configs if name in _LEGACY_OPTIONS_DOMAINS)
+        if legacy_domains:
+            canonical = ", ".join(sorted(_OPTION_DOMAIN_DIRS))
+            raise ValueError(
+                "Legacy options domains detected in reconciliation config: "
+                f"{legacy_domains}. Replace them with canonical names: {canonical}."
+            )
         self.default_allowed_statuses: Sequence[str] = tuple(
             reconciliation_cfg.get("allowed_validation_statuses", ["passed"])
         )
@@ -130,11 +143,16 @@ class ReconciliationBuilder:
         path = Path(config_path)
         text = path.read_text()
         data: Mapping[str, Any]
-        if path.suffix.lower() in {".yml", ".yaml"}:
+        suffix = path.suffix.lower()
+        if suffix == ".json":
+            data = json.loads(text)
+        elif suffix in {".yml", ".yaml"}:
             try:
                 import yaml  # type: ignore
             except Exception as exc:  # pragma: no cover - optional dependency
-                raise RuntimeError("PyYAML must be installed to parse YAML configs") from exc
+                raise RuntimeError(
+                    "PyYAML must be installed to parse YAML configs; provide JSON instead or install PyYAML"
+                ) from exc
             data = yaml.safe_load(text)
         else:
             data = json.loads(text)
@@ -185,14 +203,29 @@ class ReconciliationBuilder:
             run_id=run_id,
         )
 
-    def _run_options_reference(self, **kwargs: Any) -> Dict[str, Any]:  # pragma: no cover - shim
+    def _run_option_contract_reference(self, **kwargs: Any) -> Dict[str, Any]:
         return self._run_options_domain(**kwargs)
+
+    def _run_option_contract_ohlcv(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._run_options_domain(**kwargs)
+
+    def _run_option_open_interest(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._run_options_domain(**kwargs)
+
+    def _run_options_reference(self, **kwargs: Any) -> Dict[str, Any]:  # pragma: no cover - shim
+        raise ReconciliationError(
+            "options_reference domain alias is no longer supported. Use option_contract_reference instead."
+        )
 
     def _run_options_ohlcv(self, **kwargs: Any) -> Dict[str, Any]:  # pragma: no cover - shim
-        return self._run_options_domain(**kwargs)
+        raise ReconciliationError(
+            "options_ohlcv domain alias is no longer supported. Use option_contract_ohlcv instead."
+        )
 
     def _run_options_oi(self, **kwargs: Any) -> Dict[str, Any]:  # pragma: no cover - shim
-        return self._run_options_domain(**kwargs)
+        raise ReconciliationError(
+            "options_oi domain alias is no longer supported. Use option_open_interest instead."
+        )
 
     def _run_options_domain(
         self,
@@ -433,8 +466,13 @@ class ReconciliationBuilder:
     ) -> Dict[str, VendorSnapshot]:
         snapshots: Dict[str, VendorSnapshot] = {}
         manifests = self._load_manifests(domain)
-        domain_dir = _CANONICAL_OPTIONS_DOMAINS.get(domain)
+        domain_dir = _OPTION_DOMAIN_DIRS.get(domain)
         if not domain_dir:
+            legacy_target = _LEGACY_OPTIONS_DOMAINS.get(domain)
+            if legacy_target:
+                raise ReconciliationError(
+                    f"Unsupported legacy options domain '{domain}'. Use '{legacy_target}' instead."
+                )
             raise ReconciliationError(f"Unsupported options domain '{domain}'")
         for vendor in vendor_priority:
             manifest = manifests.get(vendor)
@@ -446,7 +484,7 @@ class ReconciliationBuilder:
             files: List[Dict[str, Any]] = []
             records_by_underlying: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
             records_by_key: Dict[str, Dict[str, Any]] = {}
-            is_timeseries = domain != "options_reference"
+            is_timeseries = domain != "option_contract_reference"
             glob_pattern = "*/daily/*/*/*.parquet" if is_timeseries else "*/*/*/*.parquet"
             for file_path in vendor_root.glob(glob_pattern):
                 partition_day = (
@@ -585,7 +623,7 @@ class ReconciliationBuilder:
 
     def _write_options_outputs(self, domain: str, records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         grouped: MutableMapping[tuple[str, str], List[Mapping[str, Any]]] = defaultdict(list)
-        if domain == "options_reference":
+        if domain == "option_contract_reference":
             for record in records:
                 underlying = str(record["underlying_symbol"])
                 iso_day = str(record["snapshot_date"])[:10]
@@ -597,13 +635,13 @@ class ReconciliationBuilder:
                 grouped[(symbol, iso_day)].append(record)
         outputs: List[Dict[str, Any]] = []
         subdir = {
-            "options_reference": "options_reference",
-            "options_ohlcv": "options_ohlcv",
-            "options_oi": "options_oi",
+            "option_contract_reference": "option_contract_reference",
+            "option_contract_ohlcv": "option_contract_ohlcv",
+            "option_open_interest": "option_open_interest",
         }[domain]
         for (identifier, iso_day), entries in grouped.items():
             year, month, day = iso_day.split("-")
-            if domain == "options_reference":
+            if domain == "option_contract_reference":
                 path = self.canonical_root / subdir / identifier / year / month / f"{day}.parquet"
             else:
                 path = (
@@ -615,7 +653,7 @@ class ReconciliationBuilder:
                     / month
                     / f"{day}.parquet"
                 )
-            if domain == "options_reference":
+            if domain == "option_contract_reference":
                 ordered = sorted(entries, key=lambda item: (item.get("option_symbol"), item.get("strike_price")))
             else:
                 ordered = sorted(entries, key=lambda item: (item.get("option_symbol"), item["timestamp"]))
@@ -848,6 +886,13 @@ class ReconciliationBuilder:
             return None
 
     def _normalize_timestamp(self, value: Any) -> str:
+        to_pydatetime = getattr(value, "to_pydatetime", None)
+        if callable(to_pydatetime):
+            candidate = to_pydatetime()
+            if isinstance(candidate, datetime):
+                if candidate.tzinfo is None:
+                    candidate = candidate.replace(tzinfo=UTC)
+                return candidate.astimezone(UTC).isoformat()
         if isinstance(value, datetime):
             return value.astimezone(UTC).isoformat()
         if isinstance(value, str):
