@@ -1,0 +1,137 @@
+# configs/risk.yml
+# Quanto Trading Platform — Risk Parameters (v1)
+# This file supplies numeric thresholds referenced by RISK_POLICY_v1.md.
+# The Risk Engine must refuse to start if any required key is missing.
+
+version: "1.0"
+
+# ----------------------------
+# Global exposure constraints
+# ----------------------------
+exposure:
+  # Max gross exposure as a fraction of NAV (long + |short|).
+  max_gross_exposure: 1.00        # 1.00 = 100% of NAV
+
+  # Max absolute net exposure as a fraction of NAV (directional bias cap).
+  max_net_exposure: 0.50          # 0.50 = 50% of NAV
+
+  # Hard leverage cap (gross_exposure / NAV).
+  max_leverage: 1.00              # keep at 1.0 for conservative v1
+
+  # Max number of simultaneously held positions.
+  max_positions: 20
+
+# ----------------------------
+# Per-symbol constraints
+# ----------------------------
+position_limits:
+  # Max position notional per symbol as fraction of NAV.
+  max_position_pct_nav: 0.10      # 10% per name
+
+  # Optional hard ban list (symbols you never want traded).
+  hard_ban_symbols: []
+
+  # Optional allow list; if non-empty, only these symbols may be traded.
+  allow_list_symbols: []
+
+# ----------------------------
+# Concentration constraints
+# ----------------------------
+concentration:
+  # Concentration cap for the top N largest positions (sum notionals / NAV).
+  top_n: 5
+  max_top_n_concentration: 0.35   # top 5 <= 35% of NAV
+
+# ----------------------------
+# Liquidity & turnover constraints
+# ----------------------------
+liquidity:
+  # Max position size relative to 20-day average daily dollar volume (ADV$).
+  # Example: 0.05 = max position notional <= 5% of ADV$.
+  max_adv_pct: 0.05
+
+  # Max daily turnover as fraction of NAV (sum of abs(order_notional) per day / NAV).
+  max_daily_turnover: 0.50        # 50% NAV turnover cap per day
+
+# ----------------------------
+# Loss & drawdown controls (kill switches)
+# ----------------------------
+loss_controls:
+  # Daily loss limit as fraction of NAV (negative value).
+  # If daily_pnl_pct <= max_daily_loss, trading halts.
+  max_daily_loss: -0.02           # -2% daily loss
+
+  # Rolling peak-to-trough drawdown limit as fraction of NAV (negative value).
+  max_drawdown: -0.10             # -10% drawdown
+
+  # Maximum consecutive losing days before throttle/halt.
+  max_consecutive_loss_days: 3
+
+  # Action on loss/drawdown breach: "halt" or "flatten_and_halt"
+  breach_action: "halt"
+
+# ----------------------------
+# Volatility & regime controls
+# ----------------------------
+volatility:
+  # Target annualized volatility used for sizing (if enabled).
+  target_vol_annual: 0.12         # 12% annualized
+
+  # Current volatility source: "rv_21" or "iv_atm_1m" (if available).
+  current_vol_source: "rv_21"
+
+  # Enable/disable volatility scaling (position sizing).
+  enable_vol_scaling: true
+
+  # Clamp scaling multiplier to avoid extreme sizes.
+  min_scale: 0.25
+  max_scale: 2.00
+
+  # Regime brake: if current vol exceeds this, apply tighter caps.
+  vol_regime_threshold_annual: 0.30  # 30% annualized
+
+  # Tightened caps applied under high-vol regime.
+  high_vol_overrides:
+    max_gross_exposure: 0.60
+    max_position_pct_nav: 0.06
+    max_daily_turnover: 0.30
+
+# ----------------------------
+# Signal constraints
+# ----------------------------
+signals:
+  # If confidence is provided, enforce a minimum.
+  min_confidence: 0.55
+
+  # If below min_confidence, either "reject" or "scale_down".
+  low_confidence_action: "scale_down"
+
+  # If scaling down, multiply target_position_pct by this factor (0 < factor < 1).
+  low_confidence_scale_factor: 0.50
+
+  # Minimum holding period in bars to reduce churn.
+  min_holding_period_bars: 3
+
+# ----------------------------
+# Broker / operational safety
+# ----------------------------
+ops:
+  # Halt after this many consecutive broker/API errors.
+  max_broker_errors: 5
+
+  # Staleness threshold for market data in seconds.
+  # (For daily bars in backtests, this is irrelevant; for live it matters.)
+  max_data_staleness_seconds: 300
+
+  # Require canonical reconciliation success before trading.
+  require_canonical_data: true
+
+# ----------------------------
+# Logging / audit
+# ----------------------------
+audit:
+  # Whether to log every risk check decision.
+  log_all_decisions: true
+
+  # Persist a daily risk summary artifact.
+  write_daily_summary: true

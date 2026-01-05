@@ -1,0 +1,38 @@
+# Data sources configuration
+# Declare upstream vendors, auth, and canonical reconciliation behavior.
+vendors:
+  - name: polygon
+    domains: [equity_ohlcv]
+  - name: iex
+    domains: [equity_ohlcv]
+  - name: occ
+    domains: [options_reference, options_ohlcv, options_oi]
+  - name: opra
+    domains: [options_reference, options_ohlcv, options_oi]
+  - name: factset
+    domains: [fundamentals]
+  - name: sec
+    domains: [fundamentals]
+
+reconciliation:
+  allowed_validation_statuses: ["passed"]
+  domains:
+    equity_ohlcv:
+      vendor_priority: [polygon, iex]
+      fallback_mode: per_symbol
+    options_reference:
+      vendor_priority: [occ, opra]
+      enforce_single_vendor_per_underlying: true
+      allow_fallback: true
+    options_ohlcv:
+      vendor_priority: [occ, opra]
+      enforce_single_vendor_per_underlying: true
+      allow_fallback: true
+    options_oi:
+      vendor_priority: [occ, opra]
+      enforce_single_vendor_per_underlying: true
+      allow_fallback: true
+    fundamentals:
+      vendor_priority: [factset, sec]
+      fundamentals_of_record: factset
+      allow_fallback: true

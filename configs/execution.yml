@@ -1,0 +1,3 @@
+# Execution configuration (Phase 1: paper trading only)
+execution:
+  mode: "paper"

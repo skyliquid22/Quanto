@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 import csv
 import gzip
 import io
-import queue
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Protocol, Sequence
 
@@ -166,53 +164,10 @@ class PolygonEquityAdapter:
         if not request.flat_file_uris:
             raise ValueError("flat_file_uris must be populated for flat-file ingestion")
 
-        queue_size = max(10, int(self.flat_file_config["queue_size"]))
-        record_queue: queue.Queue[tuple[int, int, Any]] = queue.Queue(maxsize=queue_size)
-        executor = ThreadPoolExecutor(max_workers=max(1, int(self.flat_file_config["decompression_workers"])))
-        uri_order = [str(uri) for uri in request.flat_file_uris]
-
-        def worker(uri_index: int, uri: str) -> None:
+        for uri in request.flat_file_uris:
             path = self.flat_file_resolver(uri)
-            seq = 0
-            try:
-                for record in self._iter_flat_file_records(path):
-                    normalized = self._normalize_flat_file_record(record)
-                    record_queue.put((uri_index, seq, normalized))
-                    seq += 1
-            except Exception as exc:  # pragma: no cover - surfacing worker exceptions
-                record_queue.put((uri_index, -2, exc))
-            finally:
-                record_queue.put((uri_index, -1, None))
-
-        futures = [executor.submit(worker, idx, uri) for idx, uri in enumerate(uri_order)]
-        active_files = len(uri_order)
-        buffers: Dict[int, Dict[int, Dict[str, Any]]] = {idx: {} for idx in range(active_files)}
-        expected_index: Dict[int, int] = {idx: 0 for idx in range(active_files)}
-        completed: set[int] = set()
-        current_uri_index = 0
-
-        try:
-            while len(completed) < active_files:
-                uri_idx, seq_idx, payload = record_queue.get()
-                if seq_idx == -2 and isinstance(payload, Exception):
-                    raise payload
-                if payload is None and seq_idx == -1:
-                    completed.add(uri_idx)
-                    continue
-                buffers[uri_idx][seq_idx] = payload
-                while current_uri_index < active_files:
-                    next_seq = expected_index[current_uri_index]
-                    buffer = buffers[current_uri_index]
-                    if next_seq in buffer:
-                        yield buffer.pop(next_seq)
-                        expected_index[current_uri_index] += 1
-                    else:
-                        if current_uri_index in completed and not buffer:
-                            current_uri_index += 1
-                            continue
-                        break
-        finally:
-            executor.shutdown(wait=True)
+            for record in self._iter_flat_file_records(path):
+                yield self._normalize_flat_file_record(record)
 
     async def _fetch_symbol_rest(
         self, symbol: str, request: EquityIngestionRequest, semaphore: asyncio.Semaphore
