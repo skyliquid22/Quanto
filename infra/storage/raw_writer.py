@@ -100,14 +100,24 @@ class RawOptionsWriter:
         vendor: str,
         records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
     ) -> MutableMapping[str, object]:
-        return self._write_timeseries(vendor, records, domain_dir="options_ohlcv", symbol_field="option_symbol")
+        return self._write_timeseries(
+            vendor,
+            records,
+            domain_dir="option_contract_ohlcv",
+            symbol_field="option_symbol",
+        )
 
     def write_option_open_interest(
         self,
         vendor: str,
         records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
     ) -> MutableMapping[str, object]:
-        return self._write_timeseries(vendor, records, domain_dir="options_oi", symbol_field="option_symbol")
+        return self._write_timeseries(
+            vendor,
+            records,
+            domain_dir="option_open_interest",
+            symbol_field="option_symbol",
+        )
 
     def _write_timeseries(
         self,

@@ -18,11 +18,6 @@ from .adapters import OptionReferenceIngestionRequest, OptionTimeseriesIngestion
 from .router import IngestionRouter, Mode
 
 OptionDomain = str
-DOMAIN_STORAGE = {
-    "option_contract_reference": "option_contract_reference",
-    "option_contract_ohlcv": "options_ohlcv",
-    "option_open_interest": "options_oi",
-}
 
 
 @dataclass(frozen=True)
@@ -354,8 +349,7 @@ class OptionsIngestionPipeline:
         return self.raw_writer.write_option_open_interest(vendor, records)
 
     def _manifest_dir(self, domain: OptionDomain, vendor: str) -> Path:
-        domain_dir = DOMAIN_STORAGE[domain]
-        return self.manifest_base_dir / vendor / domain_dir / "manifests"
+        return self.manifest_base_dir / vendor / domain / "manifests"
 
     def _persist_manifest(
         self,

@@ -131,9 +131,27 @@ def test_options_pipeline_end_to_end_with_checkpoint_resume(tmp_path, monkeypatc
     raw_root = tmp_path / "raw"
     reference_file = raw_root / "polygon" / "option_contract_reference" / "AAPL" / "2024" / "01" / "01.parquet"
     assert reference_file.exists()
-    ohlcv_file = raw_root / "polygon" / "options_ohlcv" / "OPT1" / "daily" / "2024" / "01" / "01.parquet"
+    ohlcv_file = (
+        raw_root
+        / "polygon"
+        / "option_contract_ohlcv"
+        / "OPT1"
+        / "daily"
+        / "2024"
+        / "01"
+        / "01.parquet"
+    )
     assert ohlcv_file.exists()
-    oi_file = raw_root / "polygon" / "options_oi" / "OPT1" / "daily" / "2024" / "01" / "01.parquet"
+    oi_file = (
+        raw_root
+        / "polygon"
+        / "option_open_interest"
+        / "OPT1"
+        / "daily"
+        / "2024"
+        / "01"
+        / "01.parquet"
+    )
     assert oi_file.exists()
 
     # Re-run with a new adapter; checkpoint should prevent additional REST calls
@@ -147,7 +165,7 @@ def test_options_pipeline_end_to_end_with_checkpoint_resume(tmp_path, monkeypatc
 
     # manifests exist per domain
     for domain in manifest["domains"].keys():
-        manifest_path = raw_root / "polygon" / DOMAIN_STORAGE[domain] / "manifests" / "options-run.json"
+        manifest_path = raw_root / "polygon" / domain / "manifests" / "options-run.json"
         assert manifest_path.exists()
 
 
@@ -164,7 +182,7 @@ def test_options_pipeline_records_failure(tmp_path, monkeypatch):
         tmp_path
         / "raw"
         / "polygon"
-        / "options_oi"
+        / "option_open_interest"
         / "manifests"
         / "options-bad.json"
     )
@@ -175,11 +193,6 @@ def test_options_pipeline_records_failure(tmp_path, monkeypatch):
     assert manifest["partitions"][-1]["status"] == "failed"
 
 
-DOMAIN_STORAGE = {
-    "option_contract_reference": "option_contract_reference",
-    "option_contract_ohlcv": "options_ohlcv",
-    "option_open_interest": "options_oi",
-}
 
 
 if __name__ == "__main__":  # pragma: no cover
