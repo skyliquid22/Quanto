@@ -12,8 +12,13 @@ import json
 import os
 from pathlib import Path
 import struct
+import sys
 from typing import Any, Dict, List, Mapping, Sequence
 import zlib
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover - import guard
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from infra.ingestion.adapters import EquityIngestionRequest, PolygonEquityAdapter
 from infra.ingestion.data_pipeline import EquityIngestionPipeline
