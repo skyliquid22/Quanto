@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+.venv
+venv/
+.quanto_data/
+data/raw/
+data/processed/
+data/features/
+logs/
+.models/

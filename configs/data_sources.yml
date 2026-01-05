@@ -6,9 +6,9 @@ vendors:
   - name: iex
     domains: [equity_ohlcv]
   - name: occ
-    domains: [options_reference, options_ohlcv, options_oi]
+    domains: [option_contract_reference, option_contract_ohlcv, option_open_interest]
   - name: opra
-    domains: [options_reference, options_ohlcv, options_oi]
+    domains: [option_contract_reference, option_contract_ohlcv, option_open_interest]
   - name: factset
     domains: [fundamentals]
   - name: sec
@@ -20,15 +20,15 @@ reconciliation:
     equity_ohlcv:
       vendor_priority: [polygon, iex]
       fallback_mode: per_symbol
-    options_reference:
+    option_contract_reference:
       vendor_priority: [occ, opra]
       enforce_single_vendor_per_underlying: true
       allow_fallback: true
-    options_ohlcv:
+    option_contract_ohlcv:
       vendor_priority: [occ, opra]
       enforce_single_vendor_per_underlying: true
       allow_fallback: true
-    options_oi:
+    option_open_interest:
       vendor_priority: [occ, opra]
       enforce_single_vendor_per_underlying: true
       allow_fallback: true

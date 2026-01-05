@@ -7,6 +7,7 @@ from typing import Any, Literal, Mapping
 
 from .adapters import (
     EquityIngestionRequest,
+    FundamentalsIngestionRequest,
     OptionReferenceIngestionRequest,
     OptionTimeseriesIngestionRequest,
 )
@@ -73,6 +74,16 @@ class IngestionRouter:
             total_symbols=request.total_symbols,
             has_flat_files=bool(request.flat_file_uris),
         )
+
+    def route_fundamentals(self, request: FundamentalsIngestionRequest) -> Mode:
+        cfg = self.config
+        if cfg.force_mode:
+            return cfg.force_mode
+        if request.flat_file_uris:
+            return "flat_file"
+        if request.total_symbols > cfg.rest_max_symbols:
+            return "flat_file"
+        return "rest"
 
     def _route_timeseries(self, *, total_days: int, total_symbols: int, has_flat_files: bool) -> Mode:
         cfg = self.config

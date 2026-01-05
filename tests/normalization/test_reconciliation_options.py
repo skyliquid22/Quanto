@@ -92,10 +92,10 @@ def test_options_enforces_single_vendor_per_underlying(tmp_path):
         use_pyarrow=False,
     )
 
-    _write_manifest(manifest_root, "options_ohlcv", "occ_run", "occ", file_hashes=[compute_file_hash(occ_spy)])
+    _write_manifest(manifest_root, "option_contract_ohlcv", "occ_run", "occ", file_hashes=[compute_file_hash(occ_spy)])
     _write_manifest(
         manifest_root,
-        "options_ohlcv",
+        "option_contract_ohlcv",
         "opra_run",
         "opra",
         file_hashes=[compute_file_hash(opra_spy), compute_file_hash(opra_qqq)],
@@ -104,7 +104,7 @@ def test_options_enforces_single_vendor_per_underlying(tmp_path):
     config = {
         "reconciliation": {
             "domains": {
-                "options_ohlcv": {
+                "option_contract_ohlcv": {
                     "vendor_priority": ["occ", "opra"],
                 }
             }
@@ -119,10 +119,10 @@ def test_options_enforces_single_vendor_per_underlying(tmp_path):
         now=datetime(2023, 1, 3, tzinfo=UTC),
     )
 
-    builder.run(domains=["options_ohlcv"], start_date=date(2023, 1, 2), end_date=date(2023, 1, 2), run_id="optionsrun")
+    builder.run(domains=["option_contract_ohlcv"], start_date=date(2023, 1, 2), end_date=date(2023, 1, 2), run_id="optionsrun")
 
-    spy_path = canonical_root / "options_ohlcv" / "SPY2301C00100000" / "daily" / "2023" / "01" / "02.parquet"
-    qqq_path = canonical_root / "options_ohlcv" / "QQQ2301C00100000" / "daily" / "2023" / "01" / "02.parquet"
+    spy_path = canonical_root / "option_contract_ohlcv" / "SPY2301C00100000" / "daily" / "2023" / "01" / "02.parquet"
+    qqq_path = canonical_root / "option_contract_ohlcv" / "QQQ2301C00100000" / "daily" / "2023" / "01" / "02.parquet"
     spy_records = _load_records(builder, spy_path)
     qqq_records = _load_records(builder, qqq_path)
 
@@ -133,7 +133,7 @@ def test_options_enforces_single_vendor_per_underlying(tmp_path):
     assert qqq_records[0]["fallback_source_vendor"] == "opra"
     assert qqq_records[0]["primary_source_vendor"] == "occ"
 
-    metrics_path = metrics_root / "options_ohlcv_optionsrun.json"
+    metrics_path = metrics_root / "option_contract_ohlcv_optionsrun.json"
     metrics_payload = json.loads(metrics_path.read_text())
     assert metrics_payload["fallback_count"] == 1
     assert metrics_payload["percent_missing_primary"] > 0
