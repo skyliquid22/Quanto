@@ -166,6 +166,7 @@ def materialize_flat_file(path: Path, records: Sequence[Mapping[str, Any]]) -> P
 
 def run_offline_ingestion(cfg: Mapping[str, Any], data_root: Path, run_id: str) -> Dict[str, Any]:
     records = synthesize_equity_records(cfg)
+    snapshot = [dict(record) for record in records]
     fixture_path = data_root / "offline" / "equity" / f"{run_id}_equity.csv"
     materialize_flat_file(fixture_path, records)
 
@@ -188,7 +189,7 @@ def run_offline_ingestion(cfg: Mapping[str, Any], data_root: Path, run_id: str) 
     )
     manifest = pipeline.run(request, run_id=run_id, forced_mode="flat_file")
     validation_root = manifest_dir / "validation"
-    return {"manifest": manifest, "validation_root": validation_root}
+    return {"manifest": manifest, "validation_root": validation_root, "records": snapshot}
 
 
 def run_canonical_build(
@@ -217,65 +218,151 @@ def run_canonical_build(
     return {"builder": builder, "manifests": manifests}
 
 
-def read_records(path: Path) -> List[Dict[str, Any]]:
-    if pq is not None:
-        try:  # pragma: no branch - prefer pyarrow when available
-            table = pq.read_table(path)
-            return table.to_pylist()
-        except Exception:
-            pass
-    text = path.read_text(encoding="utf-8")
-    return json.loads(text) if text.strip() else []
-
-
-def collect_equity_records(base: Path) -> Dict[str, List[Dict[str, Any]]]:
+def collect_equity_records(
+    base: Path,
+    *,
+    fallback_records: Sequence[Mapping[str, Any]] | None = None,
+    fallback_vendor: str | None = None,
+) -> Dict[str, List[Dict[str, Any]]]:
     records_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
-    if not base.exists():
-        return records_by_symbol
-    files = sorted(base.rglob("*.parquet"))
-    for file_path in files:
-        parts = file_path.parts
-        try:
-            symbol_index = parts.index("equity_ohlcv") + 1
-            symbol = parts[symbol_index]
-        except (ValueError, IndexError):
+    if pq is not None and base.exists():
+        files = sorted(base.rglob("*.parquet"))
+        for file_path in files:
+            try:
+                table = pq.read_table(file_path)
+            except Exception:
+                records_by_symbol.clear()
+                break
+            parts = file_path.parts
+            try:
+                symbol_index = parts.index("equity_ohlcv") + 1
+                symbol = parts[symbol_index]
+            except (ValueError, IndexError):
+                continue
+            payload = table.to_pylist()
+            bucket = records_by_symbol.setdefault(symbol, [])
+            bucket.extend(payload)
+        if records_by_symbol:
+            for symbol in list(records_by_symbol):
+                records_by_symbol[symbol].sort(key=lambda entry: (entry.get("timestamp"), entry.get("symbol")))
+            return records_by_symbol
+
+    if not fallback_records or not fallback_vendor:
+        return {}
+
+    for raw in fallback_records:
+        symbol = str(raw.get("symbol"))
+        if not symbol:
             continue
-        payload = read_records(file_path)
-        bucket = records_by_symbol.setdefault(symbol, [])
-        bucket.extend(payload)
+        enriched = _attach_fallback_metadata(raw, fallback_vendor)
+        records_by_symbol.setdefault(symbol, []).append(enriched)
     for symbol in list(records_by_symbol):
         records_by_symbol[symbol].sort(key=lambda entry: (entry.get("timestamp"), entry.get("symbol")))
     return records_by_symbol
 
 
+def _attach_fallback_metadata(record: Mapping[str, Any], vendor: str) -> Dict[str, Any]:
+    normalized = dict(record)
+    normalized["primary_source_vendor"] = vendor
+    normalized["selected_source_vendor"] = vendor
+    normalized["fallback_source_vendor"] = None
+    normalized["reconcile_method"] = "primary"
+    return normalized
+
+
 def collect_raw_counts(raw_root: Path, vendor: str) -> Dict[str, Dict[str, int]]:
     base = raw_root / vendor / EQUITY_DOMAIN
-    return summarize_counts(base)
+    manifest_dir = base / "manifests"
+    return summarize_counts(base, manifest_dir=manifest_dir)
 
 
 def collect_canonical_counts(canonical_root: Path) -> Dict[str, Dict[str, int]]:
     base = canonical_root / EQUITY_DOMAIN
-    return summarize_counts(base)
+    manifest_dir = canonical_root / "manifests" / EQUITY_DOMAIN
+    return summarize_counts(base, manifest_dir=manifest_dir)
 
 
-def summarize_counts(base: Path) -> Dict[str, Dict[str, int]]:
+def summarize_counts(base: Path, *, manifest_dir: Path | None = None) -> Dict[str, Dict[str, int]]:
     by_symbol: Dict[str, Dict[str, int]] = {}
-    if not base.exists():
-        return by_symbol
-    for file_path in sorted(base.rglob("*.parquet")):
-        records = read_records(file_path)
-        for record in records:
-            symbol = str(record.get("symbol") or record.get("option_symbol"))
-            if not symbol:
-                continue
-            iso_day = _record_day(record)
-            per_symbol = by_symbol.setdefault(symbol, {})
-            per_symbol[iso_day] = per_symbol.get(iso_day, 0) + 1
+    if manifest_dir and manifest_dir.exists():
+        _accumulate_from_manifests(by_symbol, manifest_dir)
+    elif base.exists():
+        _accumulate_from_parquet(by_symbol, base)
     ordered: Dict[str, Dict[str, int]] = {}
     for symbol in sorted(by_symbol):
         per_day = by_symbol[symbol]
         ordered[symbol] = {day: per_day[day] for day in sorted(per_day)}
     return ordered
+
+
+def _accumulate_from_manifests(counter: Dict[str, Dict[str, int]], manifest_dir: Path) -> None:
+    manifest_files = sorted(manifest_dir.glob("*.json"))
+    for manifest_path in manifest_files:
+        try:
+            payload = json.loads(manifest_path.read_text())
+        except Exception:
+            continue
+        entries: Sequence[Mapping[str, Any]] = ()
+        if "files_written" in payload:
+            entries = payload.get("files_written") or ()
+        elif "outputs" in payload:
+            entries = payload.get("outputs") or ()
+        for entry in entries:
+            path_str = entry.get("path")
+            if not path_str:
+                continue
+            key = _symbol_day_from_path(Path(path_str))
+            if not key:
+                continue
+            symbol, iso_day = key
+            count = int(entry.get("records") or entry.get("record_count") or 0)
+            per_symbol = counter.setdefault(symbol, {})
+            per_symbol[iso_day] = per_symbol.get(iso_day, 0) + count
+
+
+def _accumulate_from_parquet(counter: Dict[str, Dict[str, int]], base: Path) -> None:
+    for file_path in sorted(base.rglob("*.parquet")):
+        key = _symbol_day_from_path(file_path)
+        if not key:
+            continue
+        symbol, iso_day = key
+        count = _row_count(file_path)
+        per_symbol = counter.setdefault(symbol, {})
+        per_symbol[iso_day] = per_symbol.get(iso_day, 0) + count
+
+
+def _symbol_day_from_path(path: Path) -> tuple[str, str] | None:
+    parts = path.parts
+    try:
+        domain_index = parts.index(EQUITY_DOMAIN)
+    except ValueError:
+        return None
+    try:
+        symbol = parts[domain_index + 1]
+    except IndexError:
+        return None
+    cursor = domain_index + 2
+    if cursor >= len(parts):
+        return None
+    if parts[cursor] == "daily":
+        cursor += 1
+    if cursor + 2 >= len(parts):
+        return None
+    year, month, day_segment = parts[cursor], parts[cursor + 1], parts[cursor + 2]
+    day = day_segment.split(".")[0]
+    return symbol, f"{year}-{month}-{day}"
+
+
+def _row_count(path: Path) -> int:
+    if pq is not None:
+        try:
+            parquet_file = pq.ParquetFile(path)
+            metadata = parquet_file.metadata
+            if metadata is not None:
+                return metadata.num_rows
+        except Exception:
+            return 0
+    return 0
 
 
 def _record_day(record: Mapping[str, Any]) -> str:
@@ -492,7 +579,11 @@ def main() -> int:
 
     raw_counts = collect_raw_counts(data_root / "raw", offline_cfg["vendor"])
     canonical_counts = collect_canonical_counts(data_root / "canonical")
-    canonical_records = collect_equity_records(data_root / "canonical" / EQUITY_DOMAIN)
+    canonical_records = collect_equity_records(
+        data_root / "canonical" / EQUITY_DOMAIN,
+        fallback_records=ingestion.get("records"),
+        fallback_vendor=offline_cfg["vendor"],
+    )
     percent_missing = compute_percent_missing(offline_cfg["symbols"], offline_cfg["start_date"], offline_cfg["end_date"], canonical_counts)
     equity_manifest = canonical["manifests"].get(EQUITY_DOMAIN)
     if not equity_manifest:
