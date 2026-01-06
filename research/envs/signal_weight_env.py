@@ -35,12 +35,13 @@ class SignalWeightEnvConfig:
 class SignalWeightTradingEnv:
     """Minimal RL-style environment using canonical features as observations."""
 
-    _observation_columns = ("close", "sma_fast", "sma_slow", "sma_diff", "prev_weight")
+    _default_feature_columns = ("close", "sma_fast", "sma_slow", "sma_diff")
 
     def __init__(
         self,
         rows: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
         config: SignalWeightEnvConfig | None = None,
+        observation_columns: Sequence[str] | None = None,
     ) -> None:
         entries = [self._coerce_row(row) for row in rows]
         entries.sort(key=lambda item: item["timestamp"])
@@ -52,6 +53,13 @@ class SignalWeightTradingEnv:
         self._current_weight: float = 0.0
         self._step_index: int = 0
         self._done: bool = False
+        feature_columns = tuple(str(col).strip() for col in (observation_columns or self._default_feature_columns))
+        if not feature_columns:
+            raise ValueError("observation_columns must include at least one feature")
+        if "close" not in feature_columns:
+            raise ValueError("observation_columns must include 'close' so the environment can value positions")
+        self._feature_columns = feature_columns
+        self._observation_columns = feature_columns + ("prev_weight",)
 
     @property
     def observation_columns(self) -> Tuple[str, ...]:
@@ -122,15 +130,14 @@ class SignalWeightTradingEnv:
 
     def _build_observation(self) -> Tuple[float, ...]:
         row = self._rows[self._step_index]
-        diff = float(row["sma_diff"])
-        obs = (
-            float(row["close"]),
-            float(row["sma_fast"]),
-            float(row["sma_slow"]),
-            diff,
-            float(self._current_weight),
-        )
-        return obs
+        values = []
+        for column in self._feature_columns:
+            value = row.get(column)
+            if value is None:
+                raise ValueError(f"Row missing required observation column '{column}'")
+            values.append(float(value))
+        values.append(float(self._current_weight))
+        return tuple(values)
 
     @staticmethod
     def _coerce_row(raw: Mapping[str, object]) -> MutableMapping[str, object]:
@@ -138,21 +145,18 @@ class SignalWeightTradingEnv:
         if not isinstance(timestamp, datetime):
             raise TypeError("rows must include datetime timestamps")
         close = raw.get("close")
-        fast = raw.get("sma_fast")
-        slow = raw.get("sma_slow")
-        diff = raw.get("sma_diff")
-        if close is None or fast is None or slow is None:
-            raise ValueError("rows must include close, sma_fast, and sma_slow")
-        if diff is None:
-            diff = float(fast) - float(slow)
-        return {
-            "timestamp": timestamp,
-            "close": float(close),
-            "sma_fast": float(fast),
-            "sma_slow": float(slow),
-            "sma_diff": float(diff),
-            "sma_signal": float(raw.get("sma_signal", 0.0)),
-        }
+        if close is None:
+            raise ValueError("rows must include close prices")
+        normalized: MutableMapping[str, object] = dict(raw)
+        normalized["timestamp"] = timestamp
+        normalized["close"] = float(close)
+        fast = normalized.get("sma_fast")
+        slow = normalized.get("sma_slow")
+        if "sma_diff" not in normalized and fast is not None and slow is not None:
+            normalized["sma_diff"] = float(fast) - float(slow)
+        if "sma_signal" not in normalized:
+            normalized["sma_signal"] = float(raw.get("sma_signal", 0.0))
+        return normalized
 
 
 __all__ = ["SignalWeightEnvConfig", "SignalWeightTradingEnv"]

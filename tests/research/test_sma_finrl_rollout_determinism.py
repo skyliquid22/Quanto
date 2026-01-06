@@ -4,6 +4,7 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -12,27 +13,12 @@ from research.datasets.canonical_equity_loader import load_canonical_equity
 from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossover
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SLICE_CONFIG = PROJECT_ROOT / "tests" / "fixtures" / "configs" / "v1_slice.json"
+FIXTURE_DATA_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "canonical_data_root"
 
 
 def test_sma_finrl_rollout_determinism(tmp_path):
-    data_root = tmp_path / "rollout_data"
-    slice_config = _extend_slice_config(tmp_path)
+    data_root = _prepare_data_root(tmp_path)
     env = _build_env(data_root)
-    subprocess.check_call(
-        [
-            sys.executable,
-            "-m",
-            "scripts.run_v1_slice",
-            "--config",
-            str(slice_config),
-            "--data-root",
-            str(data_root),
-            "--offline",
-        ],
-        cwd=PROJECT_ROOT,
-        env=env,
-    )
 
     args = [
         sys.executable,
@@ -43,7 +29,7 @@ def test_sma_finrl_rollout_determinism(tmp_path):
         "--start-date",
         "2023-01-03",
         "--end-date",
-        "2023-01-10",
+        "2023-01-06",
         "--fast",
         "2",
         "--slow",
@@ -69,12 +55,10 @@ def test_sma_finrl_rollout_determinism(tmp_path):
     _assert_no_lookahead(payload, data_root)
 
 
-def _extend_slice_config(tmp_path: Path) -> Path:
-    config = json.loads(SLICE_CONFIG.read_text())
-    config["offline_ingestion"]["end_date"] = "2023-01-10"
-    config_path = tmp_path / "slice_config.json"
-    config_path.write_text(json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
-    return config_path
+def _prepare_data_root(tmp_path: Path) -> Path:
+    dest = tmp_path / "quanto_data"
+    shutil.copytree(FIXTURE_DATA_ROOT, dest)
+    return dest
 
 
 def _build_env(data_root: Path) -> dict[str, str]:

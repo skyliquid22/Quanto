@@ -9,16 +9,13 @@ import json
 import os
 from datetime import date
 from pathlib import Path
-import subprocess
 import sys
-import tempfile
 from typing import Any, Dict, List, Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover - import guard
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from infra.paths import get_data_root as default_data_root
 from infra.normalization.lineage import compute_file_hash
 from plots.equity_curves import render_equity_curves
 from research.backtests.sma_backtest import (
@@ -30,6 +27,7 @@ from research.backtests.sma_backtest import (
 )
 from research.datasets.canonical_equity_loader import load_canonical_equity
 from research.strategies.sma_crossover import SMAStrategyConfig, SMAStrategyResult, run_sma_crossover
+from scripts.run_sma_finrl_rollout import BootstrapMetadata, maybe_run_live_bootstrap, resolve_data_root
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,10 +39,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--slow", type=int, default=50, help="Slow SMA window.")
     parser.add_argument("--run-id", help="Optional run identifier; derived deterministically if omitted.")
     parser.add_argument("--data-root", help="Override data root directory.")
+    parser.add_argument("--vendor", default="polygon", help="Vendor used for live ingestion bootstrap.")
     parser.add_argument(
-        "--offline",
+        "--ingest-mode",
+        choices=["rest", "flat_file", "auto"],
+        default="rest",
+        help="Force a deterministic ingestion mode during live bootstraps.",
+    )
+    parser.add_argument(
+        "--canonical-domain",
+        default="equity_ohlcv",
+        help="Canonical domain identifier used for freshness checks and builds.",
+    )
+    parser.add_argument(
+        "--force-ingest",
         action="store_true",
-        help="If set, run the v1 slice offline workflow to synthesize canonical data first.",
+        help="Always run live ingestion before the backtest (implies canonical rebuild).",
+    )
+    parser.add_argument(
+        "--force-canonical-build",
+        action="store_true",
+        help="Always rebuild canonicals before the backtest.",
     )
     return parser.parse_args()
 
@@ -63,8 +78,18 @@ def main() -> int:
 
     data_root = resolve_data_root(args.data_root)
     os.environ["QUANTO_DATA_ROOT"] = str(data_root)
-    if args.offline:
-        _run_offline_slice(symbols, start, end, data_root)
+    bootstrap = maybe_run_live_bootstrap(
+        symbols=symbols,
+        start=start,
+        end=end,
+        data_root=data_root,
+        domain=args.canonical_domain,
+        vendor=args.vendor,
+        ingest_mode=args.ingest_mode,
+        force_ingest=args.force_ingest,
+        force_canonical=args.force_canonical_build,
+        run_id_seed=args.run_id,
+    )
 
     slices, canonical_hashes = load_canonical_equity(symbols, start, end, data_root=data_root)
     if any(not slice.rows for slice in slices.values()):
@@ -102,19 +127,11 @@ def main() -> int:
         aggregate,
         hashes,
         artifacts,
+        bootstrap,
     )
     write_report(payload, report_path)
     print(json.dumps({"report": str(report_path), "plot": str(plot_path)}, separators=(",", ":"), sort_keys=True))
     return 0
-
-
-def resolve_data_root(arg_root: str | None) -> Path:
-    if arg_root:
-        return Path(arg_root).expanduser()
-    env_override = os.environ.get("QUANTO_DATA_ROOT")
-    if env_override:
-        return Path(env_override).expanduser()
-    return default_data_root()
 
 
 def _parse_symbols(raw: str) -> List[str]:
@@ -127,50 +144,6 @@ def _parse_symbols(raw: str) -> List[str]:
         seen.add(clean)
         parsed.append(clean)
     return parsed
-
-
-def _run_offline_slice(symbols: List[str], start: date, end: date, data_root: Path) -> None:
-    config = {
-        "offline_ingestion": {
-            "vendor": "polygon",
-            "symbols": symbols,
-            "start_date": start.isoformat(),
-            "end_date": end.isoformat(),
-        },
-        "canonical": {
-            "config_path": "configs/data_sources.json",
-            "domains": ["equity_ohlcv"],
-        },
-        "reporting": {"plot_symbol": symbols[0]},
-    }
-    text = json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
-        handle.write(text)
-        config_path = Path(handle.name)
-    env = os.environ.copy()
-    env.setdefault("PYTHONPATH", str(PROJECT_ROOT))
-    env["QUANTO_DATA_ROOT"] = str(data_root)
-    cmd = [
-        sys.executable,
-        "-m",
-        "scripts.run_v1_slice",
-        "--config",
-        str(config_path),
-        "--data-root",
-        str(data_root),
-        "--offline",
-    ]
-    try:
-        result = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env, capture_output=True, text=True)
-        if result.returncode != 0:
-            sys.stderr.write(result.stdout)
-            sys.stderr.write(result.stderr)
-            raise RuntimeError("offline slice failed")
-    finally:
-        try:
-            config_path.unlink()
-        except FileNotFoundError:
-            pass
 
 
 def derive_run_id(
@@ -213,6 +186,7 @@ def build_report_payload(
     aggregate: AggregatedBacktest,
     hashes: Mapping[str, Any],
     artifacts: Mapping[str, str],
+    bootstrap: BootstrapMetadata | None = None,
 ) -> Dict[str, Any]:
     ordered_symbols = sorted(strategies)
     per_symbol = {}
@@ -235,7 +209,7 @@ def build_report_payload(
         "metrics": serialize_metrics(aggregate.metrics),
         "equity_curve": aggregate.equity_curve,
     }
-    return {
+    payload = {
         "run_id": run_id,
         "data_root": str(data_root),
         "parameters": {
@@ -250,6 +224,9 @@ def build_report_payload(
         "symbols": per_symbol,
         "aggregate": aggregate_payload,
     }
+    if bootstrap:
+        payload["bootstrap"] = bootstrap.as_payload(data_root)
+    return payload
 
 
 def write_report(payload: Dict[str, Any], path: Path) -> None:

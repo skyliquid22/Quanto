@@ -42,6 +42,7 @@ def load_canonical_equity(
     end_date: date | str,
     *,
     data_root: Path | None = None,
+    interval: str = "daily",
 ) -> Tuple[Dict[str, CanonicalEquitySlice], Dict[str, str]]:
     """Load canonical OHLCV bars for the requested symbols and dates.
 
@@ -50,6 +51,9 @@ def load_canonical_equity(
     """
 
     resolved_root = Path(data_root) if data_root else get_data_root()
+    normalized_interval = str(interval).strip().lower() or "daily"
+    if normalized_interval != "daily":
+        raise ValueError(f"Unsupported interval '{interval}'; only daily data is available in v1.")
     start = _coerce_date(start_date)
     end = _coerce_date(end_date)
     if end < start:
@@ -58,7 +62,7 @@ def load_canonical_equity(
     discovered: Dict[str, CanonicalEquitySlice] = {}
     file_hashes: Dict[str, str] = {}
     for symbol in _ordered_dedup(symbols):
-        rows, files = _load_symbol(symbol, start, end, resolved_root)
+        rows, files = _load_symbol(symbol, start, end, resolved_root, normalized_interval)
         discovered[symbol] = CanonicalEquitySlice(symbol=symbol, rows=rows, file_paths=files)
         for path in files:
             rel = _relative_to(path, resolved_root)
@@ -78,8 +82,14 @@ def _ordered_dedup(symbols: Sequence[str]) -> List[str]:
     return ordered
 
 
-def _load_symbol(symbol: str, start: date, end: date, data_root: Path) -> Tuple[List[Dict[str, Any]], List[Path]]:
-    base = data_root / "canonical" / "equity_ohlcv" / symbol / "daily"
+def _load_symbol(
+    symbol: str,
+    start: date,
+    end: date,
+    data_root: Path,
+    interval: str,
+) -> Tuple[List[Dict[str, Any]], List[Path]]:
+    base = data_root / "canonical" / "equity_ohlcv" / symbol / interval
     rows: List[Dict[str, Any]] = []
     touched_files: List[Path] = []
     for day in _iter_days(start, end):
