@@ -65,6 +65,25 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _disable_parquet_dependencies() -> None:
+    """Force JSON fallback for offline workflows to avoid binary parquet IO."""
+
+    global pq
+    pq = None
+    try:
+        import infra.storage.parquet as storage_parquet
+
+        storage_parquet._PARQUET_AVAILABLE = False  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        import infra.normalization.reconciliation_builder as recon_builder
+
+        recon_builder.pq = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
 def load_config(path: Path) -> Dict[str, Any]:
     text = path.read_text()
     suffix = path.suffix.lower()
@@ -573,6 +592,8 @@ def main() -> int:
 
     if not args.offline:
         raise RuntimeError("Online mode is not implemented for the v1 slice")
+
+    _disable_parquet_dependencies()
 
     ingestion = run_offline_ingestion(offline_cfg, data_root, run_id)
     canonical = run_canonical_build(canonical_cfg, offline_cfg, data_root, ingestion["validation_root"], run_id)
