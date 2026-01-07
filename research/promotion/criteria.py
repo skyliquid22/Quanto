@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -12,6 +12,7 @@ from research.experiments.ablation import DEFAULT_SWEEP_ROOT
 from research.experiments.comparator import compare_experiments
 from research.experiments.registry import ExperimentRecord, ExperimentRegistry
 from research.experiments.regression import RegressionGateRule, default_gate_rules, evaluate_gates
+from research.promotion.execution_criteria import ExecutionQualificationCriteria
 from research.promotion.regime_criteria import RegimeQualificationCriteria
 
 _SANITY_TURNOVER_METRIC = "trading.turnover_1d_mean"
@@ -113,6 +114,7 @@ class QualificationEvaluation:
     gate_summary: Dict[str, Any]
     sweep_summary: Mapping[str, Any] | None
     regime_report: Mapping[str, Any] | None = None
+    execution_report: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,7 @@ class QualificationCriteria:
     sweep_robustness: SweepRobustnessCriteria | None = None
     regime_diagnostics: RegimeDiagnosticsCriteria | None = None
     regime_qualification: RegimeQualificationCriteria | None = None
+    execution_qualification: ExecutionQualificationCriteria | None = field(default_factory=ExecutionQualificationCriteria)
 
     def evaluate(
         self,
@@ -197,10 +200,22 @@ class QualificationCriteria:
                 metrics_payload,
                 baseline_metrics,
                 hierarchy_enabled=hierarchy_enabled,
+                execution_metrics=metrics_payload.get("execution"),
             )
             regime_report = regime_eval.report
             failed_hard.extend(regime_eval.hard_failures)
             failed_soft.extend(regime_eval.soft_failures)
+
+        execution_report: Mapping[str, Any] | None = None
+        if self.execution_qualification is not None:
+            execution_eval = self.execution_qualification.evaluate(
+                comparison,
+                metrics_payload,
+                baseline_metrics,
+            )
+            execution_report = execution_eval.report
+            failed_hard.extend(execution_eval.hard_failures)
+            failed_soft.extend(execution_eval.soft_failures)
 
         passed = not failed_hard
         return QualificationEvaluation(
@@ -211,6 +226,7 @@ class QualificationCriteria:
             gate_summary=gate_report.to_dict(),
             sweep_summary=sweep_summary,
             regime_report=regime_report,
+            execution_report=execution_report,
         )
 
     def _constraint_reason(self, metrics_payload: Mapping[str, Any]) -> str | None:

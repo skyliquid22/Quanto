@@ -58,6 +58,7 @@ class ExecutionController:
         portfolio_value: float,
         day_start_value: float,
         peak_value: float,
+        regime_bucket: str | None = None,
     ) -> ExecutionStepResult:
         price_map = {symbol: float(prices[symbol]) for symbol in prices}
         if hasattr(self._broker, "update_market_data"):
@@ -92,6 +93,7 @@ class ExecutionController:
                 fills=[],
                 reference_prices=price_map,
                 side_lookup=side_lookup,
+                regime_bucket=regime_bucket,
             )
             dummy_update = PortfolioUpdate(
                 cash=float(cash),
@@ -129,6 +131,7 @@ class ExecutionController:
             fills=fills,
             reference_prices=price_map,
             side_lookup=side_lookup,
+            regime_bucket=regime_bucket,
         )
         total_fees = sum(fill.fees for fill in fills)
         new_cash, new_holdings = self._apply_fills(cash, holdings, fills, side_lookup)

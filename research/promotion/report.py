@@ -27,6 +27,7 @@ class QualificationReport:
     sweep_name: str | None = None
     sweep_summary: Mapping[str, Any] | None = None
     regime_qualification: Mapping[str, Any] | None = None
+    execution_qualification: Mapping[str, Any] | None = None
 
     def to_dict(self) -> Mapping[str, Any]:
         payload = {
@@ -44,6 +45,8 @@ class QualificationReport:
             payload["sweep_summary"] = self.sweep_summary
         if self.regime_qualification is not None:
             payload["regime_qualification"] = self.regime_qualification
+        if self.execution_qualification is not None:
+            payload["execution_qualification"] = self.execution_qualification
         return payload
 
 

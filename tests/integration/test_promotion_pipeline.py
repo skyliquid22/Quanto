@@ -79,6 +79,25 @@ def _write_experiment(
                 "sharpe": sharpe,
             },
         },
+        "execution": {
+            "summary": {
+                "fill_rate": 0.999,
+                "reject_rate": 0.001,
+                "avg_slippage_bps": 1.0,
+                "p95_slippage_bps": 2.5,
+                "total_fees": 10.0,
+                "turnover_realized": turnover,
+                "execution_halts": 0.0,
+                "halt_reasons": [],
+                "order_latency_ms": {"mean": 50.0},
+                "partial_fill_rate": 0.0,
+            },
+            "regime": {
+                "high_vol": {"avg_slippage_bps": 1.0, "p95_slippage_bps": 3.0, "reject_rate": 0.001, "fill_rate": 0.999},
+                "mid_vol": {"avg_slippage_bps": 1.0, "p95_slippage_bps": 2.5, "reject_rate": 0.001, "fill_rate": 0.999},
+                "low_vol": {"avg_slippage_bps": 1.0, "p95_slippage_bps": 2.0, "reject_rate": 0.001, "fill_rate": 0.999},
+            },
+        },
     }
     (base / "evaluation" / "metrics.json").write_text(
         json.dumps(metrics_payload, sort_keys=True, indent=2),

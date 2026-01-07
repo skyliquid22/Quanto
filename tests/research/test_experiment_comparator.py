@@ -52,6 +52,30 @@ def _write_experiment(root: Path, experiment_id: str, sharpe: float, drawdown: f
             "exposure_violation_count": 0.0,
             "turnover_violation_count": 0.0,
         },
+        "execution": {
+            "summary": {
+                "fill_rate": 0.99 if experiment_id == "candidate" else 0.995,
+                "reject_rate": 0.01 if experiment_id == "candidate" else 0.005,
+                "avg_slippage_bps": 4.0 if experiment_id == "candidate" else 2.0,
+                "p95_slippage_bps": 6.0 if experiment_id == "candidate" else 3.0,
+                "total_fees": 50.0 if experiment_id == "candidate" else 40.0,
+                "turnover_realized": 0.6 if experiment_id == "candidate" else 0.5,
+                "execution_halts": 0.0,
+                "halt_reasons": [],
+                "order_latency_ms": {},
+                "partial_fill_rate": 0.0,
+            },
+            "regime": {
+                "high_vol": {
+                    "avg_slippage_bps": 5.0 if experiment_id == "candidate" else 4.0,
+                    "p95_slippage_bps": 7.0 if experiment_id == "candidate" else 5.0,
+                    "reject_rate": 0.01,
+                    "fill_rate": 0.99,
+                },
+                "mid_vol": {"avg_slippage_bps": 2.0, "p95_slippage_bps": 3.0, "reject_rate": 0.01, "fill_rate": 0.99},
+                "low_vol": {"avg_slippage_bps": 1.0, "p95_slippage_bps": 2.0, "reject_rate": 0.01, "fill_rate": 0.99},
+            },
+        },
     }
     metrics_path = base / "evaluation" / "metrics.json"
     metrics_path.write_text(json.dumps(metrics, sort_keys=True, indent=2), encoding="utf-8")
@@ -82,4 +106,13 @@ def test_compare_experiments_deltas(tmp_path: Path):
 
     ordered_ids = [entry.metric_id for entry in result.metrics]
     assert ordered_ids[0] == "performance.total_return"
-    assert ordered_ids[-1] == "safety.turnover_violation_count"
+    assert ordered_ids[-1] == "execution.summary.partial_fill_rate"
+
+    exec_summary = result.execution_metrics["summary"]
+    assert exec_summary["fill_rate"]["candidate"] == 0.99
+    assert exec_summary["fill_rate"]["baseline"] == 0.995
+    assert exec_summary["fill_rate"]["delta"] == -0.005
+    high_vol_exec = result.execution_metrics["regime"]["high_vol"]["avg_slippage_bps"]
+    assert high_vol_exec["candidate"] == 5.0
+    assert high_vol_exec["baseline"] == 4.0
+    assert high_vol_exec["delta"] == 1.0

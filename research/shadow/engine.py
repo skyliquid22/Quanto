@@ -82,6 +82,7 @@ class ShadowEngine:
         self._base_feature_columns = self._split_feature_columns(self._observation_columns, self._regime_names)
         self._dates_array = np.asarray(self._calendar, dtype=object)
         self._regime_matrix = self._resolve_regime_matrix()
+        self._regime_buckets = self._compute_regime_buckets()
         self._execution_mode = execution_mode or "none"
         self._execution_options = dict(execution_options or {})
         self._execution_controller: ExecutionController | None = None
@@ -136,6 +137,7 @@ class ShadowEngine:
                 portfolio_value=portfolio_value,
                 day_start_value=day_start_value,
                 peak_value=state.peak_portfolio_value,
+                regime_bucket=self._regime_bucket_for_step(state.current_step),
             )
             update = result.update
             execution_details = self._summarize_execution(result)
@@ -508,6 +510,30 @@ class ShadowEngine:
             return np.asarray([], dtype=float)
         return np.asarray(series, dtype=float)
 
+    def _compute_regime_buckets(self) -> tuple[str, ...] | None:
+        if not self._regime_names or not self._regime_matrix.size:
+            return None
+        try:
+            signal_index = self._regime_names.index("market_vol_20d")
+        except ValueError:
+            return None
+        values = []
+        for idx in range(min(len(self._calendar), len(self._regime_matrix))):
+            row = self._regime_matrix[idx]
+            value = float(row[signal_index]) if signal_index < len(row) else 0.0
+            values.append(value)
+        if not values:
+            return None
+        q33 = _quantile(values, 0.33)
+        q66 = _quantile(values, 0.66)
+        return tuple(_bucket_label(value, q33, q66) for value in values)
+
+    def _regime_bucket_for_step(self, step_index: int) -> str | None:
+        buckets = self._regime_buckets
+        if not buckets or step_index >= len(buckets):
+            return None
+        return buckets[step_index]
+
     def _extract_prices(self, snapshot: Mapping[str, Any]) -> List[float]:
         prices: List[float] = []
         panel = snapshot["panel"]
@@ -526,13 +552,38 @@ class ShadowEngine:
         metrics_json = self.out_dir / "metrics.json"
         if metrics_json.exists():
             payload = json.loads(metrics_json.read_text(encoding="utf-8"))
-            payload["execution_summary"] = self._execution_metrics.summary()
+            payload["execution"] = self._execution_metrics.snapshot()
             metrics_json.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
         return path
 
 
 def _override(value: float | int | None, fallback: float | int | None) -> float | int | None:
     return value if value is not None else fallback
+
+
+def _bucket_label(value: float, q33: float, q66: float) -> str:
+    if value <= q33:
+        return "low_vol"
+    if value <= q66:
+        return "mid_vol"
+    return "high_vol"
+
+
+def _quantile(values: Sequence[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = percentile * (len(ordered) - 1)
+    low_index = int(np.floor(rank))
+    high_index = int(np.ceil(rank))
+    low_value = ordered[low_index]
+    high_value = ordered[high_index]
+    if low_index == high_index:
+        return low_value
+    weight = rank - low_index
+    return low_value + weight * (high_value - low_value)
 
 
 __all__ = ["DEFAULT_INITIAL_CASH", "ShadowEngine"]

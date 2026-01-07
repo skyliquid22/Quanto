@@ -72,6 +72,14 @@ METRIC_SCHEMA: Tuple[MetricSchemaEntry, ...] = (
     MetricSchemaEntry("max_weight_violation_count", "safety", "lower_is_better", "count", "Per-asset cap violations."),
     MetricSchemaEntry("exposure_violation_count", "safety", "lower_is_better", "count", "Exposure cap or min cash violations."),
     MetricSchemaEntry("turnover_violation_count", "safety", "lower_is_better", "count", "Turnover cap violations."),
+    MetricSchemaEntry("summary.fill_rate", "execution", "higher_is_better", "ratio", "Execution fill rate."),
+    MetricSchemaEntry("summary.reject_rate", "execution", "lower_is_better", "ratio", "Execution reject rate."),
+    MetricSchemaEntry("summary.avg_slippage_bps", "execution", "lower_is_better", "bps", "Average slippage for fills."),
+    MetricSchemaEntry("summary.p95_slippage_bps", "execution", "lower_is_better", "bps", "95th percentile slippage."),
+    MetricSchemaEntry("summary.total_fees", "execution", "lower_is_better", "currency", "Total execution fees."),
+    MetricSchemaEntry("summary.turnover_realized", "execution", "lower_is_better", "ratio", "Realized turnover attributed to execution."),
+    MetricSchemaEntry("summary.execution_halts", "execution", "lower_is_better", "count", "Execution halt events."),
+    MetricSchemaEntry("summary.partial_fill_rate", "execution", "lower_is_better", "ratio", "Fraction of partially filled orders."),
 )
 
 

@@ -31,6 +31,7 @@ class RegimeQualificationCriteria:
     sharpe_degradation_pct: float = 15.0
     turnover_increase_pct: float = 20.0
     mode_transition_fraction: float = 0.10
+    execution_drawdown_regression_pct: float = 2.0
 
     def evaluate(
         self,
@@ -39,18 +40,25 @@ class RegimeQualificationCriteria:
         baseline_metrics: Mapping[str, Any],
         *,
         hierarchy_enabled: bool,
+        execution_metrics: Mapping[str, Any] | None = None,
     ) -> RegimeQualificationEvaluation:
         """Evaluate regime-specific gates and summarize failures."""
 
         regime_deltas = _copy_regime_deltas(comparison.regime_deltas)
         report: Dict[str, Dict[str, Any]] = {
-            bucket: {"passed": True, "checks": {}, "deltas": regime_deltas.get(bucket, {})}
+            bucket: {
+                "passed": True,
+                "checks": {},
+                "deltas": regime_deltas.get(bucket, {}),
+                "execution_metrics": _execution_bucket_metrics(execution_metrics, bucket),
+            }
             for bucket in _REGIME_BUCKETS
         }
         hard_failures: list[str] = []
         soft_failures: list[str] = []
 
         self._evaluate_high_vol_drawdown(regime_deltas, report, hard_failures)
+        self._evaluate_execution_drawdown(regime_deltas, report, hard_failures)
         if hierarchy_enabled:
             self._evaluate_defensive_exposure(regime_deltas, report, hard_failures)
         self._evaluate_global_sharpe(candidate_metrics, baseline_metrics, report, soft_failures)
@@ -93,6 +101,38 @@ class RegimeQualificationCriteria:
                 "baseline": baseline,
                 "limit": limit,
                 "delta": entry.get("delta") if entry else None,
+            },
+        )
+
+    def _evaluate_execution_drawdown(
+        self,
+        regime_deltas: Mapping[str, Mapping[str, Mapping[str, float | None]]],
+        report: Dict[str, Dict[str, Any]],
+        failures: list[str],
+    ) -> None:
+        entry = regime_deltas.get("high_vol", {}).get("max_drawdown")
+        candidate = entry.get("candidate") if isinstance(entry, Mapping) else None
+        baseline = entry.get("baseline") if isinstance(entry, Mapping) else None
+        status = "pass"
+        reason = None
+        limit = None
+        if candidate is not None and baseline is not None:
+            limit = baseline + (self.execution_drawdown_regression_pct / 100.0)
+            if candidate > limit + _TOLERANCE:
+                status = "fail"
+                reason = "execution_high_vol_drawdown_regressed"
+                failures.append(reason)
+        _record_check(
+            report,
+            "high_vol",
+            "execution_drawdown_guard",
+            status if candidate is not None and baseline is not None else "skip",
+            {
+                "observed": candidate,
+                "baseline": baseline,
+                "limit": limit,
+                "delta": entry.get("delta") if isinstance(entry, Mapping) else None,
+                "tolerance_pct": self.execution_drawdown_regression_pct,
             },
         )
 
@@ -306,6 +346,24 @@ def _copy_regime_deltas(
         for metric, values in metrics.items():
             copied[bucket][metric] = dict(values)
     return copied
+
+
+def _execution_bucket_metrics(
+    execution_metrics: Mapping[str, Any] | None,
+    bucket: str,
+) -> Dict[str, float | None]:
+    if not isinstance(execution_metrics, Mapping):
+        return {}
+    regime = execution_metrics.get("regime")
+    if not isinstance(regime, Mapping):
+        return {}
+    bucket_entry = regime.get(bucket)
+    if not isinstance(bucket_entry, Mapping):
+        return {}
+    result: Dict[str, float | None] = {}
+    for key in ("avg_slippage_bps", "p95_slippage_bps", "reject_rate", "fill_rate"):
+        result[key] = _as_float(bucket_entry.get(key))
+    return result
 
 
 def _normalize_mapping(values: Mapping[str, Any] | None) -> Dict[str, float]:

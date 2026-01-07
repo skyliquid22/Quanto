@@ -122,6 +122,25 @@ def _metrics_payload(
                 "sharpe": 1.2,
             },
         },
+        "execution": {
+            "summary": {
+                "fill_rate": 0.995,
+                "reject_rate": 0.002,
+                "avg_slippage_bps": 2.0,
+                "p95_slippage_bps": 4.0,
+                "total_fees": 20.0,
+                "turnover_realized": 0.3,
+                "execution_halts": 0.0,
+                "halt_reasons": [],
+                "order_latency_ms": {},
+                "partial_fill_rate": 0.0,
+            },
+            "regime": {
+                "high_vol": {"avg_slippage_bps": 2.5, "p95_slippage_bps": 5.0, "reject_rate": 0.002, "fill_rate": 0.995},
+                "mid_vol": {"avg_slippage_bps": 1.5, "p95_slippage_bps": 3.0, "reject_rate": 0.002, "fill_rate": 0.995},
+                "low_vol": {"avg_slippage_bps": 1.0, "p95_slippage_bps": 2.0, "reject_rate": 0.002, "fill_rate": 0.995},
+            },
+        },
     }
 
 
