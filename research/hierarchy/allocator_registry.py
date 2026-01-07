@@ -36,10 +36,25 @@ class EqualWeightAllocator:
 
 
 class SMAAllocator:
-    def __init__(self, *, mode: str = "hard", sigmoid_scale: float = 5.0) -> None:
+    def __init__(
+        self,
+        *,
+        mode: str = "hard",
+        sigmoid_scale: float = 5.0,
+        fast_window: int = 20,
+        slow_window: int = 50,
+    ) -> None:
+        fast = int(fast_window)
+        slow = int(slow_window)
+        if fast <= 0 or slow <= 0:
+            raise ValueError("SMA allocator windows must be positive")
+        if fast >= slow:
+            raise ValueError("SMA allocator requires fast_window < slow_window")
         self._policy = SMAWeightPolicy(
             SMAWeightPolicyConfig(mode=mode, sigmoid_scale=sigmoid_scale)
         )
+        self.fast_window = fast
+        self.slow_window = slow
 
     def act(self, _: np.ndarray, *, context: Mapping[str, Any]) -> np.ndarray:
         panel = context.get("panel")
@@ -77,6 +92,30 @@ class PPOAllocator:
         return arr
 
 
+@dataclass
+class DefensiveCashAllocator:
+    num_assets: int
+    target_exposure: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.num_assets <= 0:
+            raise ValueError("defensive_cash allocator requires at least one asset")
+        exposure = float(self.target_exposure)
+        if exposure < 0.0 or exposure > 1.0:
+            raise ValueError("target_exposure must be within [0, 1]")
+        object.__setattr__(self, "target_exposure", exposure)
+
+    def act(self, _: np.ndarray, *, context: Mapping[str, Any]) -> np.ndarray:
+        assets = int(context.get("num_assets", self.num_assets)) or self.num_assets
+        if assets <= 0:
+            raise ValueError("defensive_cash allocator requires positive asset count")
+        exposure = self.target_exposure
+        if exposure <= 0.0:
+            return np.zeros(assets, dtype=np.float32)
+        per_asset = exposure / assets
+        return np.full(assets, per_asset, dtype=np.float32)
+
+
 def build_allocator(allocator_config: Mapping[str, Any], *, num_assets: int) -> Allocator:
     """Instantiate an allocator from the serialized configuration."""
 
@@ -90,12 +129,22 @@ def build_allocator(allocator_config: Mapping[str, Any], *, num_assets: int) -> 
     if alloc_type == "sma":
         mode = str(allocator_config.get("mode", "hard"))
         sigmoid_scale = float(allocator_config.get("sigmoid_scale", 5.0))
-        return SMAAllocator(mode=mode, sigmoid_scale=sigmoid_scale)
+        fast_window = int(allocator_config.get("fast_window", 20))
+        slow_window = int(allocator_config.get("slow_window", 50))
+        return SMAAllocator(
+            mode=mode,
+            sigmoid_scale=sigmoid_scale,
+            fast_window=fast_window,
+            slow_window=slow_window,
+        )
     if alloc_type == "ppo":
         checkpoint = allocator_config.get("checkpoint")
         if not checkpoint:
             raise ValueError("ppo allocator requires a checkpoint path")
         return PPOAllocator(str(checkpoint))
+    if alloc_type == "defensive_cash":
+        exposure = float(allocator_config.get("target_exposure", 0.0))
+        return DefensiveCashAllocator(num_assets=num_assets, target_exposure=exposure)
     raise ValueError(f"Unsupported allocator type '{alloc_type}'")
 
 

@@ -68,8 +68,8 @@ def _run_once(rows):
     controller = ModeController(config=controller_cfg)
     allocator_cfg = {
         "neutral": {"type": "equal_weight"},
-        "risk_on": {"type": "sma", "mode": "hard"},
-        "defensive": {"type": "equal_weight"},
+        "risk_on": {"type": "sma", "mode": "hard", "fast_window": 2, "slow_window": 4},
+        "defensive": {"type": "defensive_cash"},
     }
     allocators = {mode: build_allocator(cfg, num_assets=env.num_assets) for mode, cfg in allocator_cfg.items()}
     policy = HierarchicalPolicy(controller, allocators, config.risk_config)
@@ -108,3 +108,17 @@ def test_hierarchical_rollout_determinism():
     assert first.modes == second.modes
     assert payload_first == payload_second
     assert {"risk_on", "defensive"}.issubset(set(first.modes))
+
+    exposures_by_mode = {"defensive": [], "risk_on": []}
+    realized = first.weights[1:]  # skip initial weights
+    for mode, weights in zip(first.modes, realized):
+        exposure = sum(weights.values())
+        if mode in exposures_by_mode:
+            exposures_by_mode[mode].append(exposure)
+
+    assert exposures_by_mode["defensive"], "defensive mode must appear in rollout"
+    assert exposures_by_mode["risk_on"], "risk_on mode must appear in rollout"
+    defensive_avg = sum(exposures_by_mode["defensive"]) / len(exposures_by_mode["defensive"])
+    risk_on_avg = sum(exposures_by_mode["risk_on"]) / len(exposures_by_mode["risk_on"])
+    assert defensive_avg <= risk_on_avg
+    assert defensive_avg <= 0.05
