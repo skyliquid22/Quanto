@@ -72,6 +72,10 @@ def evaluation_payload(
     }
     if cfg.risk_config is not None:
         payload["config"]["risk"] = cfg.risk_config.to_dict()
+    if metrics.regime_slicing is not None:
+        payload["regime_slicing"] = metrics.regime_slicing
+    if metrics.performance_by_regime is not None:
+        payload["performance_by_regime"] = metrics.performance_by_regime
     return payload
 
 

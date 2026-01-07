@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
 import numpy as np
 
+from research.execution import (
+    ExecutionController,
+    ExecutionControllerConfig,
+    ExecutionMetricsRecorder,
+    ExecutionRiskConfig,
+    OrderCompilerConfig,
+    SimBrokerAdapter,
+    SimBrokerConfig,
+)
 from research.experiments.registry import ExperimentRecord, ExperimentRegistry
 from research.hierarchy.allocator_registry import build_allocator
 from research.hierarchy.controller import ControllerConfig, ModeController
@@ -26,6 +36,7 @@ from research.shadow.portfolio import (
 )
 from research.shadow.schema import ShadowState, initial_state
 from research.shadow.state_store import StateStore
+from research.execution.alpaca_broker import AlpacaBrokerAdapter, AlpacaBrokerConfig
 
 
 DEFAULT_INITIAL_CASH = 10_000.0
@@ -45,6 +56,8 @@ class ShadowEngine:
         out_dir: Path,
         registry: ExperimentRegistry | None = None,
         promotion_root: Path | None = None,
+        execution_mode: str = "none",
+        execution_options: Mapping[str, Any] | None = None,
     ) -> None:
         self.experiment_id = experiment_id
         self.data_source = data_source
@@ -69,29 +82,64 @@ class ShadowEngine:
         self._base_feature_columns = self._split_feature_columns(self._observation_columns, self._regime_names)
         self._dates_array = np.asarray(self._calendar, dtype=object)
         self._regime_matrix = self._resolve_regime_matrix()
+        self._execution_mode = execution_mode or "none"
+        self._execution_options = dict(execution_options or {})
+        self._execution_controller: ExecutionController | None = None
+        self._execution_metrics: ExecutionMetricsRecorder | None = None
+        self._execution_broker = None
+        self._execution_metrics_path: Path | None = None
         self._load_spec()
         self._validate_promotion()
         self._initialize_policy()
+        self._initialize_execution()
 
     def step(self) -> dict[str, Any]:
         state = self._ensure_state()
         if state.current_step >= len(self._calendar):
             raise StopIteration("Replay range exhausted.")
+        if self._execution_controller and state.halted:
+            raise RuntimeError(f"Execution halted previously: {state.halt_reason or 'HALTED'}")
         as_of = self._calendar[state.current_step]
         snapshot = self.data_source.snapshot(as_of)
         prices = self._extract_prices(snapshot)
         portfolio_value = valuate_portfolio(state.cash, state.holdings, prices)
         prev_weights = weights_from_holdings(state.holdings, prices, portfolio_value)
         state.portfolio_value = portfolio_value
+        day_start_value = state.daily_start_value or portfolio_value
+        state.peak_portfolio_value = max(state.peak_portfolio_value, portfolio_value, day_start_value)
         mode = state.last_mode
         raw_action, target_weights, mode = self._determine_policy_outputs(snapshot, prev_weights, mode, state.current_step)
-        update = rebalance_portfolio(
-            cash=state.cash,
-            holdings=state.holdings,
-            prices=prices,
-            target_weights=target_weights,
-            transaction_cost_bp=self._spec.cost_config.transaction_cost_bp,
-        )
+        target_weight_map = {symbol: float(target_weights[idx]) for idx, symbol in enumerate(self._symbol_order)}
+        prices_by_symbol = {symbol: float(prices[idx]) for idx, symbol in enumerate(self._symbol_order)}
+        execution_details: dict[str, Any] = self._empty_execution_log()
+        if self._execution_controller is None:
+            update = rebalance_portfolio(
+                cash=state.cash,
+                holdings=state.holdings,
+                prices=prices,
+                target_weights=target_weights,
+                transaction_cost_bp=self._spec.cost_config.transaction_cost_bp,
+            )
+            state.open_orders = []
+            state.last_broker_sync = None
+            state.halted = False
+            state.halt_reason = None
+        else:
+            result = self._execution_controller.process_step(
+                as_of=as_of.isoformat(),
+                step_index=state.current_step,
+                cash=state.cash,
+                holdings=state.holdings,
+                prices=prices_by_symbol,
+                target_weights=target_weight_map,
+                prev_weights=prev_weights,
+                portfolio_value=portfolio_value,
+                day_start_value=day_start_value,
+                peak_value=state.peak_portfolio_value,
+            )
+            update = result.update
+            execution_details = self._summarize_execution(result)
+            self._update_state_from_execution(state, result, as_of)
         diag = constraint_diagnostics(update.weights, prev_weights, self._spec.risk_config)
         state.cash = update.cash
         state.holdings = update.holdings
@@ -100,6 +148,8 @@ class ShadowEngine:
         state.last_turnover = update.turnover
         state.last_mode = mode
         state.portfolio_value = update.portfolio_value
+        state.daily_start_value = update.portfolio_value
+        state.peak_portfolio_value = max(state.peak_portfolio_value, update.portfolio_value)
         state.current_step += 1
         if state.current_step < len(self._calendar):
             state.current_date = self._calendar[state.current_step].date().isoformat()
@@ -112,6 +162,8 @@ class ShadowEngine:
             update=update,
             mode=mode,
             diagnostics=diag,
+            target_weights=target_weight_map,
+            execution=execution_details,
         )
         self.logger.append(record)
         self.state_store.save(state)
@@ -125,6 +177,10 @@ class ShadowEngine:
             except StopIteration:
                 break
             steps += 1
+            if self._execution_controller is not None:
+                state = self._ensure_state()
+                if state.halted:
+                    break
         state = self._ensure_state()
         completed = state.current_step >= len(self._calendar)
         summary = {
@@ -135,6 +191,9 @@ class ShadowEngine:
             "state_path": str(self.state_store.state_path),
             "log_path": str(self.logger.steps_path),
         }
+        metrics_path = self._write_execution_metrics()
+        if metrics_path is not None:
+            summary["execution_metrics_path"] = str(metrics_path)
         self.logger.write_summary(summary)
         return summary
 
@@ -251,6 +310,76 @@ class ShadowEngine:
             None,
         )
 
+    def _initialize_execution(self) -> None:
+        mode = (self._execution_mode or "none").lower()
+        if mode == "none":
+            return
+        if mode not in {"sim", "alpaca_paper"}:
+            raise ValueError(f"Unsupported execution_mode '{self._execution_mode}'")
+        self._execution_metrics = ExecutionMetricsRecorder()
+        order_config = self._build_order_config()
+        risk_config = self._build_execution_risk_config()
+        if mode == "sim":
+            sim_payload = self._execution_options.get("sim_broker") or {}
+            broker = SimBrokerAdapter(
+                SimBrokerConfig(
+                    slippage_bps=float(sim_payload.get("slippage_bps", 0.0)),
+                    fee_bps=float(sim_payload.get("fee_bps", 0.0)),
+                    fee_per_order=float(sim_payload.get("fee_per_order", 0.0)),
+                )
+            )
+        else:
+            alpaca_payload = self._execution_options.get("alpaca") or {}
+            broker_config = None
+            if alpaca_payload:
+                broker_config = AlpacaBrokerConfig(
+                    api_key=str(alpaca_payload["api_key"]),
+                    secret_key=str(alpaca_payload["secret_key"]),
+                    base_url=str(alpaca_payload.get("base_url", "https://paper-api.alpaca.markets")),
+                )
+            broker = AlpacaBrokerAdapter(config=broker_config)
+        controller_config = ExecutionControllerConfig(
+            run_id=self.run_id,
+            symbol_order=self._symbol_order,
+            order_config=order_config,
+            risk_config=risk_config,
+        )
+        self._execution_controller = ExecutionController(
+            broker=broker,
+            metrics=self._execution_metrics,
+            config=controller_config,
+        )
+        self._execution_broker = broker
+        self._execution_metrics_path = self.out_dir / "execution_metrics.json"
+
+    def _build_order_config(self) -> OrderCompilerConfig:
+        payload = self._execution_options.get("order_config") or {}
+        min_notional = float(payload.get("min_notional", 1.0))
+        return OrderCompilerConfig(min_notional=max(min_notional, 0.0))
+
+    def _build_execution_risk_config(self) -> ExecutionRiskConfig:
+        spec_cfg = self._spec.risk_config or RiskConfig()
+        base = ExecutionRiskConfig(
+            max_gross_exposure=spec_cfg.exposure_cap,
+            min_cash_pct=spec_cfg.min_cash,
+            max_symbol_weight=spec_cfg.max_weight,
+            max_daily_turnover=spec_cfg.max_turnover_1d,
+            max_active_positions=len(self._symbol_order),
+        )
+        overrides_payload = self._execution_options.get("risk_overrides") or {}
+        if not overrides_payload:
+            return base
+        overrides = ExecutionRiskConfig.from_mapping(overrides_payload)
+        return ExecutionRiskConfig(
+            max_gross_exposure=_override(overrides.max_gross_exposure, base.max_gross_exposure),
+            min_cash_pct=_override(overrides.min_cash_pct, base.min_cash_pct),
+            max_symbol_weight=_override(overrides.max_symbol_weight, base.max_symbol_weight),
+            max_daily_turnover=_override(overrides.max_daily_turnover, base.max_daily_turnover),
+            max_active_positions=int(overrides.max_active_positions or base.max_active_positions),
+            max_daily_loss=_override(overrides.max_daily_loss, base.max_daily_loss),
+            max_trailing_drawdown=_override(overrides.max_trailing_drawdown, base.max_trailing_drawdown),
+        )
+
     def _build_observation(self, snapshot: Mapping[str, Any], prev_weights: Sequence[float]) -> tuple[float, ...]:
         panel = snapshot["panel"]
         regime_values = tuple(float(value) for value in snapshot.get("regime_features") or ())
@@ -275,6 +404,8 @@ class ShadowEngine:
         update: PortfolioUpdate,
         mode: str | None,
         diagnostics: Mapping[str, float],
+        target_weights: Mapping[str, float],
+        execution: Mapping[str, Any],
     ) -> Dict[str, Any]:
         return {
             "step": int(step_index),
@@ -289,7 +420,47 @@ class ShadowEngine:
             "cash": float(update.cash),
             "holdings": [float(value) for value in update.holdings],
             "constraint_diagnostics": {key: float(diagnostics[key]) for key in sorted(diagnostics)},
+            "target_weights": {symbol: float(target_weights.get(symbol, 0.0)) for symbol in self._symbol_order},
+            "execution": dict(execution),
         }
+
+    def _empty_execution_log(self) -> dict[str, Any]:
+        return {
+            "mode": self._execution_mode,
+            "orders_compiled": [],
+            "orders_submitted": [],
+            "orders_rejected": [],
+            "open_orders": [],
+            "fills": [],
+            "risk_snapshot": {},
+            "broker_errors": [],
+            "halted": False,
+            "halt_reason": None,
+        }
+
+    def _summarize_execution(self, result: "ExecutionStepResult") -> dict[str, Any]:
+        return {
+            "mode": self._execution_mode,
+            "orders_compiled": [order.to_dict() for order in result.compiled_orders],
+            "orders_submitted": [order.to_dict() for order in result.orders_submitted],
+            "orders_rejected": [order.to_dict() for order in result.orders_rejected],
+            "open_orders": [order.to_dict() for order in result.open_orders],
+            "fills": [fill.to_dict() for fill in result.fills],
+            "risk_snapshot": dict(result.risk_snapshot),
+            "broker_errors": list(result.broker_errors),
+            "halted": result.halted,
+            "halt_reason": result.halt_reason,
+        }
+
+    def _update_state_from_execution(self, state: ShadowState, result: "ExecutionStepResult", as_of: Any) -> None:
+        state.open_orders = [order.to_dict() for order in result.open_orders]
+        state.last_broker_sync = as_of.isoformat()
+        state.halted = bool(result.halted)
+        state.halt_reason = result.halt_reason
+        existing = set(state.submitted_order_ids)
+        for order in result.orders_submitted:
+            existing.add(order.client_order_id)
+        state.submitted_order_ids = sorted(existing)
 
     def _resolve_symbol_order(self) -> tuple[str, ...]:
         if hasattr(self.data_source, "symbol_order"):
@@ -347,6 +518,21 @@ class ShadowEngine:
                 raise ValueError(f"Snapshot missing close price for symbol '{symbol}'")
             prices.append(float(price))
         return prices
+
+    def _write_execution_metrics(self) -> Path | None:
+        if self._execution_metrics is None or self._execution_metrics_path is None:
+            return None
+        path = self._execution_metrics.write(self._execution_metrics_path)
+        metrics_json = self.out_dir / "metrics.json"
+        if metrics_json.exists():
+            payload = json.loads(metrics_json.read_text(encoding="utf-8"))
+            payload["execution_summary"] = self._execution_metrics.summary()
+            metrics_json.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+        return path
+
+
+def _override(value: float | int | None, fallback: float | int | None) -> float | int | None:
+    return value if value is not None else fallback
 
 
 __all__ = ["DEFAULT_INITIAL_CASH", "ShadowEngine"]

@@ -26,6 +26,7 @@ class QualificationReport:
     gate_summary: Mapping[str, Any]
     sweep_name: str | None = None
     sweep_summary: Mapping[str, Any] | None = None
+    regime_qualification: Mapping[str, Any] | None = None
 
     def to_dict(self) -> Mapping[str, Any]:
         payload = {
@@ -41,6 +42,8 @@ class QualificationReport:
             payload["sweep_name"] = self.sweep_name
         if self.sweep_summary is not None:
             payload["sweep_summary"] = self.sweep_summary
+        if self.regime_qualification is not None:
+            payload["regime_qualification"] = self.regime_qualification
         return payload
 
 

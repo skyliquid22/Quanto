@@ -7,6 +7,7 @@ import math
 from statistics import median
 from typing import Dict, List, Mapping, Sequence, Tuple, Literal
 
+from research.eval.regime_slicing import compute_regime_slices
 from research.risk import PROJECTION_TOLERANCE, RiskConfig
 from research.hierarchy.modes import normalize_mode
 
@@ -31,6 +32,8 @@ class MetricResult:
     trading: Dict[str, object]
     safety: Dict[str, float]
     returns: List[float]
+    regime_slicing: Dict[str, object] | None = None
+    performance_by_regime: Dict[str, Dict[str, float | None]] | None = None
 
 
 @dataclass(frozen=True)
@@ -124,7 +127,23 @@ def compute_metric_bundle(
     for key, value in constraint_diag.items():
         safety[key] = float(value)
     rounded_returns = [_round(value, cfg.float_precision) for value in returns]
-    return MetricResult(performance=perf, trading=trading, safety=safety, returns=rounded_returns)
+    regime_result = compute_regime_slices(
+        regime_feature_series,
+        regime_feature_names,
+        returns=returns,
+        exposures=exposures,
+        turnover_by_step=turnover_by_step,
+        annualization_days=cfg.annualization_days,
+        float_precision=cfg.float_precision,
+    )
+    return MetricResult(
+        performance=perf,
+        trading=trading,
+        safety=safety,
+        returns=rounded_returns,
+        regime_slicing=regime_result.metadata if regime_result else None,
+        performance_by_regime=regime_result.performance_by_regime if regime_result else None,
+    )
 
 
 def _performance_metrics(

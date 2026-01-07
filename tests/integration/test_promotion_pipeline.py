@@ -41,6 +41,8 @@ def _write_experiment(
             "tx_cost_total": 2.0,
             "tx_cost_bps": 11.0,
             "avg_cash": 0.1,
+            "mode_counts": {},
+            "mode_transitions": {},
         },
         "safety": {
             "nan_inf_violations": 0.0,
@@ -49,6 +51,33 @@ def _write_experiment(
             "max_weight_violation_count": 0.0,
             "exposure_violation_count": 0.0,
             "turnover_violation_count": 0.0,
+        },
+        "regime_slicing": {"signal": "market_vol_20d", "quantiles": {"q33": 0.2, "q66": 0.7}},
+        "performance_by_regime": {
+            "high_vol": {
+                "total_return": 0.05,
+                "max_drawdown": max_drawdown,
+                "volatility_ann": 0.3,
+                "avg_exposure": 0.5,
+                "avg_turnover": turnover,
+                "sharpe": sharpe,
+            },
+            "mid_vol": {
+                "total_return": 0.04,
+                "max_drawdown": max_drawdown,
+                "volatility_ann": 0.25,
+                "avg_exposure": 0.6,
+                "avg_turnover": turnover,
+                "sharpe": sharpe,
+            },
+            "low_vol": {
+                "total_return": 0.03,
+                "max_drawdown": max_drawdown,
+                "volatility_ann": 0.2,
+                "avg_exposure": 0.7,
+                "avg_turnover": turnover,
+                "sharpe": sharpe,
+            },
         },
     }
     (base / "evaluation" / "metrics.json").write_text(

@@ -49,6 +49,7 @@ class ComparisonResult:
     metrics: List[MetricComparison]
     summary: ComparisonSummary
     missing_metrics: List[Dict[str, str]]
+    regime_deltas: Dict[str, Dict[str, Dict[str, float | None]]]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -58,6 +59,7 @@ class ComparisonResult:
             "summary": asdict(self.summary),
             "metrics": [asdict(entry) for entry in self.metrics],
             "missing_metrics": list(self.missing_metrics),
+            "regime_deltas": self.regime_deltas,
         }
 
 
@@ -104,6 +106,7 @@ def compare_experiments(
         "candidate": _experiment_metadata(candidate_payload, candidate_record),
         "baseline": _experiment_metadata(baseline_payload, baseline_record),
     }
+    regime_deltas = _compare_regime_sections(candidate_payload, baseline_payload)
     return ComparisonResult(
         candidate_experiment_id=candidate_record.experiment_id,
         baseline_experiment_id=baseline_record.experiment_id,
@@ -111,6 +114,7 @@ def compare_experiments(
         metrics=comparisons,
         summary=summary,
         missing_metrics=missing_details,
+        regime_deltas=regime_deltas,
     )
 
 
@@ -207,6 +211,55 @@ def _percent_change(delta: float, baseline: float) -> float | None:
         return None
     value = (delta / baseline) * 100.0
     return _round(value, _PERCENT_PRECISION)
+
+
+_REGIME_BUCKETS = ("high_vol", "mid_vol", "low_vol")
+_REGIME_METRICS = ("total_return", "max_drawdown", "volatility_ann", "avg_exposure", "avg_turnover", "sharpe")
+
+
+def _compare_regime_sections(
+    candidate_payload: Mapping[str, Any],
+    baseline_payload: Mapping[str, Any],
+) -> Dict[str, Dict[str, Dict[str, float | None]]]:
+    result: Dict[str, Dict[str, Dict[str, float | None]]] = {bucket: {} for bucket in _REGIME_BUCKETS}
+    candidate_section = candidate_payload.get("performance_by_regime")
+    baseline_section = baseline_payload.get("performance_by_regime")
+    if not isinstance(candidate_section, Mapping) and not isinstance(baseline_section, Mapping):
+        return result
+    for bucket in _REGIME_BUCKETS:
+        candidate_bucket = candidate_section.get(bucket) if isinstance(candidate_section, Mapping) else None
+        baseline_bucket = baseline_section.get(bucket) if isinstance(baseline_section, Mapping) else None
+        if not isinstance(candidate_bucket, Mapping) and not isinstance(baseline_bucket, Mapping):
+            continue
+        bucket_result: Dict[str, Dict[str, float | None]] = {}
+        for metric in _REGIME_METRICS:
+            candidate_value = _coerce_float(candidate_bucket.get(metric)) if isinstance(candidate_bucket, Mapping) else None
+            baseline_value = _coerce_float(baseline_bucket.get(metric)) if isinstance(baseline_bucket, Mapping) else None
+            delta = delta_pct = None
+            if candidate_value is not None and baseline_value is not None:
+                raw_delta = candidate_value - baseline_value
+                delta = _round(raw_delta, _DELTA_PRECISION)
+                delta_pct = _percent_change(raw_delta, baseline_value)
+            bucket_result[metric] = {
+                "candidate": candidate_value,
+                "baseline": baseline_value,
+                "delta": delta,
+                "delta_pct": delta_pct,
+            }
+        result[bucket] = bucket_result
+    return result
+
+
+def _coerce_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return float(number)
 
 
 def _round(value: float, precision: int) -> float:
