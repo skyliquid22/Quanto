@@ -28,6 +28,7 @@ class ExperimentPaths:
     runs_dir: Path
     evaluation_dir: Path
     logs_dir: Path
+    promotion_dir: Path
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class ExperimentRecord:
     evaluation_dir: Path
     logs_dir: Path
     metrics_path: Path
+    promotion_dir: Path
 
 
 class ExperimentRegistry:
@@ -69,8 +71,9 @@ class ExperimentRegistry:
         spec_dir = base / "spec"
         runs_dir = base / "runs"
         evaluation_dir = base / "evaluation"
+        promotion_dir = base / "promotion"
         logs_dir = base / "logs"
-        for path in (spec_dir, runs_dir, evaluation_dir, logs_dir):
+        for path in (spec_dir, runs_dir, evaluation_dir, logs_dir, promotion_dir):
             path.mkdir(parents=True, exist_ok=True)
         return ExperimentPaths(
             root=base,
@@ -78,6 +81,7 @@ class ExperimentRegistry:
             runs_dir=runs_dir,
             evaluation_dir=evaluation_dir,
             logs_dir=logs_dir,
+            promotion_dir=promotion_dir,
         )
 
     def write_spec(self, spec: ExperimentSpec, paths: ExperimentPaths) -> Path:
@@ -105,6 +109,7 @@ class ExperimentRegistry:
         evaluation_dir = base / "evaluation"
         metrics_path = evaluation_dir / "metrics.json"
         logs_dir = base / "logs"
+        promotion_dir = base / "promotion"
         if not spec_path.exists():
             raise FileNotFoundError(f"Spec not found for experiment '{experiment_id}': {spec_path}")
         if not metrics_path.exists():
@@ -116,6 +121,7 @@ class ExperimentRegistry:
             evaluation_dir=evaluation_dir,
             logs_dir=logs_dir,
             metrics_path=metrics_path,
+            promotion_dir=promotion_dir,
         )
 
     def resolve_identifier(self, identifier: str) -> ExperimentRecord:
@@ -177,6 +183,13 @@ class ExperimentRegistry:
             return datetime.fromisoformat(recorded)
         except ValueError:
             return datetime.min.replace(tzinfo=timezone.utc)
+
+    def resolve_with_spec(self, experiment_id: str) -> Tuple[ExperimentRecord, ExperimentSpec]:
+        """Return the experiment record alongside its parsed specification."""
+
+        record = self.get(experiment_id)
+        spec = ExperimentSpec.from_file(record.spec_path)
+        return record, spec
 
 
 __all__ = ["ExperimentAlreadyExistsError", "ExperimentPaths", "ExperimentRecord", "ExperimentRegistry"]
