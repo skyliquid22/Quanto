@@ -12,6 +12,7 @@ from research.experiments.ablation import DEFAULT_SWEEP_ROOT
 from research.experiments.comparator import compare_experiments
 from research.experiments.registry import ExperimentRecord, ExperimentRegistry
 from research.experiments.regression import RegressionGateRule, default_gate_rules, evaluate_gates
+from research.promotion.regime_criteria import RegimeQualificationCriteria
 
 _SANITY_TURNOVER_METRIC = "trading.turnover_1d_mean"
 
@@ -111,6 +112,7 @@ class QualificationEvaluation:
     metrics_snapshot: Mapping[str, Any]
     gate_summary: Dict[str, Any]
     sweep_summary: Mapping[str, Any] | None
+    regime_report: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,7 @@ class QualificationCriteria:
     sweep_root: Path | None = None
     sweep_robustness: SweepRobustnessCriteria | None = None
     regime_diagnostics: RegimeDiagnosticsCriteria | None = None
+    regime_qualification: RegimeQualificationCriteria | None = None
 
     def evaluate(
         self,
@@ -147,6 +150,7 @@ class QualificationCriteria:
         resolved_rules = list(gate_rules) if gate_rules else default_gate_rules()
         gate_report = evaluate_gates(comparison, resolved_rules)
         metrics_payload = _load_metrics(candidate_record.metrics_path)
+        baseline_metrics = _load_metrics(baseline_record.metrics_path)
         failed_hard: List[str] = []
         failed_soft: List[str] = []
 
@@ -185,6 +189,19 @@ class QualificationCriteria:
             if regime_reason:
                 self._route_failure(regime_reason, self.regime_diagnostics.severity, failed_hard, failed_soft)
 
+        regime_report: Mapping[str, Any] | None = None
+        if self.regime_qualification is not None:
+            hierarchy_enabled = self._hierarchy_enabled(candidate_record)
+            regime_eval = self.regime_qualification.evaluate(
+                comparison,
+                metrics_payload,
+                baseline_metrics,
+                hierarchy_enabled=hierarchy_enabled,
+            )
+            regime_report = regime_eval.report
+            failed_hard.extend(regime_eval.hard_failures)
+            failed_soft.extend(regime_eval.soft_failures)
+
         passed = not failed_hard
         return QualificationEvaluation(
             passed=passed,
@@ -193,6 +210,7 @@ class QualificationCriteria:
             metrics_snapshot=metrics_payload,
             gate_summary=gate_report.to_dict(),
             sweep_summary=sweep_summary,
+            regime_report=regime_report,
         )
 
     def _constraint_reason(self, metrics_payload: Mapping[str, Any]) -> str | None:
@@ -272,6 +290,15 @@ class QualificationCriteria:
             summary["regression_path"] = str(regression_path)
             summary["regression"] = _read_optional_json(regression_path)
         return summary
+
+    def _hierarchy_enabled(self, record: ExperimentRecord) -> bool:
+        try:
+            payload = json.loads(record.spec_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(payload, Mapping):
+            return False
+        return bool(payload.get("hierarchy_enabled"))
 
 
 def _load_metrics(path: Path) -> Mapping[str, Any]:
