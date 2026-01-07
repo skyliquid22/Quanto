@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from research.eval.metrics import MetricConfig, compute_metric_bundle
+from research.risk import RiskConfig
 
 
 def test_metric_bundle_expected_values():
@@ -32,8 +33,13 @@ def test_metric_bundle_expected_values():
     assert result.trading["hhi_mean"] == 0.53
     assert result.trading["tx_cost_total"] == 1.5
     assert result.trading["tx_cost_bps"] == 137.931034
+    assert result.trading["avg_cash"] == 0.0
     assert result.safety["nan_inf_violations"] == 0.0
     assert result.safety["action_bounds_violations"] == 0.0
+    assert result.safety["constraint_violations_count"] == 0.0
+    assert result.safety["max_weight_violation_count"] == 0.0
+    assert result.safety["exposure_violation_count"] == 0.0
+    assert result.safety["turnover_violation_count"] == 0.0
     assert result.returns == [0.1, -0.045455, 0.142857]
 
 
@@ -52,3 +58,30 @@ def test_metric_bundle_nan_detection():
     )
     assert result.safety["nan_inf_violations"] == 4.0
     assert result.safety["action_bounds_violations"] == 1.0
+    assert result.safety["constraint_violations_count"] >= 1.0
+
+
+def test_constraint_metrics_detect_violations():
+    account_values = [100.0, 101.0, 99.0]
+    weights = [
+        {"AAA": 0.7, "BBB": 0.2},
+        {"AAA": 0.9, "BBB": 0.1},
+        {"AAA": 0.4, "BBB": 0.7},
+    ]
+    config = MetricConfig(
+        float_precision=6,
+        risk_config=RiskConfig(max_weight=0.6, exposure_cap=0.75, min_cash=0.1, max_turnover_1d=0.3),
+    )
+    result = compute_metric_bundle(
+        account_values,
+        weights,
+        transaction_costs=[0.0, 0.0],
+        symbols=("AAA", "BBB"),
+        config=config,
+    )
+    safety = result.safety
+    assert safety["max_weight_violation_count"] >= 2.0
+    assert safety["exposure_violation_count"] >= 1.0
+    assert safety["turnover_violation_count"] >= 1.0
+    assert safety["constraint_violations_count"] >= safety["max_weight_violation_count"]
+    assert result.trading["avg_cash"] >= 0.0

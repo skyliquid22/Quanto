@@ -42,6 +42,11 @@ def _make_args(tmp_path, **overrides):
         "canonical_domain": "equity_ohlcv",
         "force_ingest": False,
         "force_canonical_build": False,
+        "max_weight": 1.0,
+        "exposure_cap": 1.0,
+        "min_cash": 0.0,
+        "max_turnover_1d": None,
+        "allow_short": False,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

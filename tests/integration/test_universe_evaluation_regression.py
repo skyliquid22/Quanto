@@ -95,9 +95,16 @@ def _assert_payload_integrity(payload: dict) -> None:
     trading = payload["trading"]
     assert 0.0 <= trading["turnover_1d_mean"] <= 2.0
     assert trading["hhi_mean"] <= 1.0
+    assert "avg_cash" in trading
+    assert trading["avg_cash"] >= 0.0
     safety = payload["safety"]
     assert safety["nan_inf_violations"] == 0.0
     assert safety["action_bounds_violations"] == 0.0
+    assert "constraint_violations_count" in safety
+    assert "max_weight_violation_count" in safety
+    assert "exposure_violation_count" in safety
+    assert "turnover_violation_count" in safety
+    assert safety["constraint_violations_count"] >= 0.0
     series = payload["series"]
     timestamps = series["timestamps"]
     returns = series["returns"]

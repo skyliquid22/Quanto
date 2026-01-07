@@ -42,10 +42,15 @@ def _write_experiment(root: Path, experiment_id: str, sharpe: float, drawdown: f
             "hhi_mean": 0.45,
             "tx_cost_total": tx_cost_total,
             "tx_cost_bps": 15.0,
+            "avg_cash": 0.1,
         },
         "safety": {
             "nan_inf_violations": 0.0,
             "action_bounds_violations": 0.0,
+            "constraint_violations_count": 0.0,
+            "max_weight_violation_count": 0.0,
+            "exposure_violation_count": 0.0,
+            "turnover_violation_count": 0.0,
         },
     }
     metrics_path = base / "evaluation" / "metrics.json"
@@ -77,4 +82,4 @@ def test_compare_experiments_deltas(tmp_path: Path):
 
     ordered_ids = [entry.metric_id for entry in result.metrics]
     assert ordered_ids[0] == "performance.total_return"
-    assert ordered_ids[-1] == "safety.action_bounds_violations"
+    assert ordered_ids[-1] == "safety.turnover_violation_count"

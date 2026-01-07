@@ -79,6 +79,8 @@ def test_universe_env_interface_and_determinism():
     assert done is False
     assert set(info["weight_target"].keys()) == {"AAPL", "MSFT"}
     assert info["weight_realized"] == info["weight_target"]
+    assert info["weights"] == info["weight_target"]
+    assert "raw_action" in info
     assert info["price_close"]["AAPL"] == rows[0]["panel"]["AAPL"]["close"]
     assert not np.isnan(obs2).any()
 

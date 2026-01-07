@@ -64,6 +64,8 @@ def evaluation_payload(
             }
         },
     }
+    if cfg.risk_config is not None:
+        payload["config"]["risk"] = cfg.risk_config.to_dict()
     return payload
 
 

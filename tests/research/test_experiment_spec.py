@@ -45,6 +45,15 @@ def test_experiment_spec_id_changes_on_field_update():
     assert spec_a.experiment_id != spec_b.experiment_id
 
 
+def test_experiment_spec_id_changes_on_risk_update():
+    spec = _base_spec()
+    spec_with_risk = dict(spec)
+    spec_with_risk["risk_config"] = {"max_weight": 0.2}
+    spec_a = ExperimentSpec.from_mapping(spec)
+    spec_b = ExperimentSpec.from_mapping(spec_with_risk)
+    assert spec_a.experiment_id != spec_b.experiment_id
+
+
 def test_missing_required_field_fails_fast():
     spec = _base_spec()
     spec.pop("experiment_name")

@@ -36,6 +36,7 @@ from research.features.feature_registry import (
 )
 from research.policies.sma_weight_policy import SMAWeightPolicy, SMAWeightPolicyConfig
 from research.runners.rollout import RolloutResult, run_rollout
+from research.risk import RiskConfig
 from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossover
 from scripts.build_canonical_datasets import build_missing_equity_ohlcv_canonical
 
@@ -155,6 +156,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fast", type=int, default=20, help="Fast SMA window.")
     parser.add_argument("--slow", type=int, default=50, help="Slow SMA window.")
     parser.add_argument("--transaction-cost-bp", type=float, default=1.0, help="Round-trip transaction cost in basis points.")
+    parser.add_argument("--max-weight", type=float, default=1.0, help="Per-asset weight cap enforced during projection.")
+    parser.add_argument("--exposure-cap", type=float, default=1.0, help="Total exposure cap enforced during projection.")
+    parser.add_argument("--min-cash", type=float, default=0.0, help="Minimum cash allocation reserved each step.")
+    parser.add_argument("--max-turnover-1d", type=float, help="Optional turnover cap (L1 distance) per rebalance.")
+    parser.add_argument("--allow-short", action="store_true", help="Disable long-only constraint in projection.")
     parser.add_argument("--policy-mode", choices=["hard", "sigmoid"], default="hard", help="Mapping used by the SMA policy.")
     parser.add_argument("--sigmoid-scale", type=float, default=5.0, help="Scale factor for sigmoid mode.")
     parser.add_argument(
@@ -206,6 +212,16 @@ def _resolve_symbol_list(symbol: str, symbols_arg: Sequence[str] | None) -> List
     if not clean:
         raise SystemExit("symbol must be provided")
     return [clean]
+
+
+def _build_risk_config(args: argparse.Namespace) -> RiskConfig:
+    return RiskConfig(
+        long_only=not bool(getattr(args, "allow_short", False)),
+        max_weight=None if args.max_weight is None else float(args.max_weight),
+        exposure_cap=None if args.exposure_cap is None else float(args.exposure_cap),
+        min_cash=None if args.min_cash is None else float(args.min_cash),
+        max_turnover_1d=None if args.max_turnover_1d is None else float(args.max_turnover_1d),
+    )
 
 
 def needs_canonical_refresh(
@@ -657,7 +673,8 @@ def main() -> int:
     if len(rows) < 2:
         raise SystemExit("Not enough aligned feature rows to run the rollout")
 
-    env_config = SignalWeightEnvConfig(transaction_cost_bp=args.transaction_cost_bp)
+    risk_config = _build_risk_config(args)
+    env_config = SignalWeightEnvConfig(transaction_cost_bp=args.transaction_cost_bp, risk_config=risk_config)
     env = SignalWeightTradingEnv(rows, env_config, observation_columns=base_observation_columns)
     observation_headers = env.observation_columns
     policy = SMAWeightPolicy(SMAWeightPolicyConfig(mode=args.policy_mode, sigmoid_scale=args.sigmoid_scale))
@@ -669,6 +686,7 @@ def main() -> int:
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
         "transaction_cost_bp": env_config.transaction_cost_bp,
+        "risk_config": env_config.risk_config.to_dict(),
         "policy": {
             "type": "sma_weight",
             "mode": policy.mode,
@@ -766,6 +784,7 @@ def derive_run_id(
             "canonical_hashes": {key: canonical_hashes[key] for key in sorted(canonical_hashes)},
             "feature_set": feature_set,
             "observation_columns": list(observation_columns),
+            "risk_config": env_config.risk_config.to_dict(),
         }
     else:
         canonical = {
@@ -780,6 +799,7 @@ def derive_run_id(
             "canonical_hashes": {key: canonical_hashes[key] for key in sorted(canonical_hashes)},
             "feature_set": feature_set,
             "observation_columns": list(observation_columns),
+            "risk_config": env_config.risk_config.to_dict(),
         }
     digest = hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -824,6 +844,7 @@ def build_report_payload(
         "feature_set": feature_set,
         "observation_columns": list(base_observation_columns),
         "panel_observation_columns": list(observation_headers),
+        "risk_config": env_config.risk_config.to_dict(),
     }
     weights_series = _weights_series_for_report(result)
     series = {

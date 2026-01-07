@@ -7,6 +7,9 @@ from datetime import datetime
 import math
 from typing import Iterable, List, Mapping, MutableMapping, Sequence, Tuple
 
+from research.regime import RegimeState
+from research.risk import RiskConfig, project_weights
+
 
 @dataclass(frozen=True)
 class SignalWeightEnvConfig:
@@ -14,9 +17,8 @@ class SignalWeightEnvConfig:
 
     initial_cash: float = 10_000.0
     transaction_cost_bp: float = 1.0
-    allow_short: bool = False
     action_clip: Tuple[float, float] = (0.0, 1.0)
-    exposure_cap: float = 1.0
+    risk_config: RiskConfig = RiskConfig()
 
     def __post_init__(self) -> None:
         low, high = self.action_clip
@@ -24,15 +26,10 @@ class SignalWeightEnvConfig:
             raise ValueError("initial_cash must be positive")
         if self.transaction_cost_bp < 0:
             raise ValueError("transaction_cost_bp must be non-negative")
-        if self.exposure_cap <= 0:
-            raise ValueError("exposure_cap must be positive")
         if high < low:
             raise ValueError("action_clip upper bound cannot be less than lower bound")
-        if not self.allow_short:
-            if low < 0.0:
-                raise ValueError("action_clip lower bound cannot be negative when allow_short=False")
-            if high > 1.0:
-                raise ValueError("action_clip upper bound cannot exceed 1.0 when allow_short=False")
+        if not isinstance(self.risk_config, RiskConfig):
+            raise TypeError("risk_config must be a RiskConfig instance")
 
 
 class SignalWeightTradingEnv:
@@ -58,7 +55,10 @@ class SignalWeightTradingEnv:
         if len(entries) < 2:
             raise ValueError("at least two rows are required to run the environment")
         self._rows: List[MutableMapping[str, object]] = entries
-        self._feature_columns = feature_columns
+        regime_names = self._infer_regime_feature_names(entries)
+        base_columns = self._split_feature_columns(feature_columns, regime_names)
+        self._feature_columns = base_columns
+        self._regime_feature_columns = regime_names
         self._symbol_order = self._determine_symbol_order()
         if not self._symbol_order:
             raise ValueError("at least one symbol is required to run the environment")
@@ -112,7 +112,8 @@ class SignalWeightTradingEnv:
         next_row = self._rows[self._step_index + 1]
         prev_value = self._portfolio_value
 
-        target_weights = self._normalize_action(action)
+        action_vector = self._prepare_action(action)
+        target_weights = self._project_action(action_vector)
         prev_weights = list(self._current_weights)
         trade_notional = [(target_weights[idx] - prev_weights[idx]) * prev_value for idx in range(self._num_assets)]
         cost_rate = self.config.transaction_cost_bp / 10_000.0
@@ -133,18 +134,25 @@ class SignalWeightTradingEnv:
 
         price_payload = self._format_price_payload(row)
         target_payload = self._format_weight_payload(target_weights)
+        raw_payload = self._format_weight_payload(action_vector)
         info = {
             "timestamp": row["timestamp"],
             "price_close": price_payload,
+            "raw_action": raw_payload,
+            "weights": target_payload,
             "weight_target": target_payload,
             "weight_realized": target_payload,
             "portfolio_value": next_value,
             "cost_paid": cost_paid,
             "reward": reward,
         }
+        regime_values = self._regime_vector(row)
+        if regime_values:
+            info["regime_features"] = regime_values
+            info["regime_state"] = row.get("regime_state")
         return self._build_observation(), reward, done, info
 
-    def _normalize_action(self, value: float | Sequence[float]) -> List[float]:
+    def _prepare_action(self, value: float | Sequence[float]) -> List[float]:
         low, high = self.config.action_clip
         if isinstance(value, (list, tuple)):
             raw = [float(v) for v in value]
@@ -154,16 +162,14 @@ class SignalWeightTradingEnv:
             raise ValueError(f"Action dimension {len(raw)} does not match expected assets {self._num_assets}")
         if len(raw) == 1 and self._num_assets > 1:
             raw = raw * self._num_assets
-        clipped = [max(low, min(high, val)) for val in raw]
-        if not self.config.allow_short and any(val < 0.0 for val in clipped):
-            raise ValueError("Negative weights are not allowed when allow_short=False")
-        total = sum(clipped)
-        if total <= 0:
-            normalized = [0.0 for _ in clipped]
-        else:
-            normalized = [val / total for val in clipped]
-        exposure_cap = min(float(self.config.exposure_cap), 1.0)
-        return [weight * exposure_cap for weight in normalized]
+        return [max(low, min(high, entry)) for entry in raw]
+
+    def _project_action(self, vector: Sequence[float]) -> List[float]:
+        prev = self._current_weights
+        projected = project_weights(vector, prev, self.config.risk_config)
+        if len(projected) != self._num_assets:
+            raise ValueError("Projected weight vector does not match environment assets")
+        return projected
 
     def _compute_returns(self, row: Mapping[str, object], next_row: Mapping[str, object]) -> List[float]:
         returns: List[float] = []
@@ -179,6 +185,7 @@ class SignalWeightTradingEnv:
     def _build_observation(self) -> Tuple[float, ...]:
         row = self._rows[self._step_index]
         values: List[float] = []
+        regime_values = self._regime_vector(row)
         for symbol in self._symbol_order:
             features = row["panel"][symbol]
             for column in self._feature_columns:
@@ -186,15 +193,18 @@ class SignalWeightTradingEnv:
                 if value is None:
                     raise ValueError(f"Row missing required observation column '{column}' for symbol '{symbol}'")
                 values.append(float(value))
+            if regime_values:
+                values.extend(regime_values)
         values.extend(self._current_weights)
         return tuple(values)
 
     def _build_observation_headers(self) -> Tuple[str, ...]:
         if self._num_assets == 1:
-            return self._feature_columns + ("prev_weight",)
+            return self._feature_columns + self._regime_feature_columns + ("prev_weight",)
         headers: List[str] = []
         for symbol in self._symbol_order:
             headers.extend(f"{symbol}:{column}" for column in self._feature_columns)
+            headers.extend(f"{symbol}:{column}" for column in self._regime_feature_columns)
         headers.extend(f"{symbol}:prev_weight" for symbol in self._symbol_order)
         return tuple(headers)
 
@@ -227,6 +237,34 @@ class SignalWeightTradingEnv:
         if self._num_assets == 1:
             return float(row["panel"][self._symbol_order[0]]["close"])
         return {symbol: float(row["panel"][symbol]["close"]) for symbol in self._symbol_order}
+
+    def _infer_regime_feature_names(self, rows: Sequence[Mapping[str, object]]) -> Tuple[str, ...]:
+        for row in rows:
+            state = row.get("regime_state")
+            if isinstance(state, RegimeState):
+                return tuple(state.feature_names)
+        return tuple()
+
+    def _split_feature_columns(self, columns: Tuple[str, ...], regime_names: Tuple[str, ...]) -> Tuple[str, ...]:
+        if not regime_names:
+            return columns
+        if len(columns) <= len(regime_names):
+            raise ValueError("Regime features require at least one dedicated per-symbol feature column")
+        base = columns[: len(columns) - len(regime_names)]
+        suffix = columns[len(base) :]
+        if tuple(suffix) != regime_names:
+            raise ValueError("Regime feature ordering must match observation column suffix")
+        return base
+
+    def _regime_vector(self, row: Mapping[str, object]) -> Tuple[float, ...]:
+        if not self._regime_feature_columns:
+            return tuple()
+        state = row.get("regime_state")
+        if not isinstance(state, RegimeState):
+            raise ValueError("Rows are missing regime_state despite regime features being enabled")
+        if tuple(state.feature_names) != self._regime_feature_columns:
+            raise ValueError("Regime feature names changed during rollout")
+        return tuple(float(value) for value in state.features)
 
     @staticmethod
     def _coerce_row(raw: Mapping[str, object], feature_columns: Sequence[str]) -> MutableMapping[str, object]:

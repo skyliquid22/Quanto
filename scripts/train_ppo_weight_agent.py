@@ -33,6 +33,7 @@ from research.features.feature_registry import (
 )
 from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossover
 from research.training.ppo_trainer import EvaluationResult, evaluate, train_ppo
+from research.risk import RiskConfig
 from scripts.run_sma_finrl_rollout import (  # type: ignore
     BootstrapMetadata,
     _canonical_files_exist as _rollout_canonical_files_exist,
@@ -66,6 +67,11 @@ def parse_args() -> argparse.Namespace:
         help="Feature set used for environment observations.",
     )
     parser.add_argument("--transaction-cost-bp", type=float, default=1.0, help="Transaction cost in basis points.")
+    parser.add_argument("--max-weight", type=float, default=1.0, help="Per-asset weight cap enforced by projection.")
+    parser.add_argument("--exposure-cap", type=float, default=1.0, help="Total exposure cap enforced by projection.")
+    parser.add_argument("--min-cash", type=float, default=0.0, help="Minimum cash allocation reserved each step.")
+    parser.add_argument("--max-turnover-1d", type=float, help="Optional turnover cap per rebalance (L1 distance).")
+    parser.add_argument("--allow-short", action="store_true", help="Disable long-only constraint in the projection.")
     parser.add_argument("--timesteps", type=int, default=10_000, help="Number of PPO timesteps to train.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed passed to PPO.")
     parser.add_argument("--learning-rate", type=float, default=3e-4, help="Learning rate for PPO.")
@@ -123,6 +129,16 @@ def _resolve_symbol_list(symbol: str, symbols_arg: Sequence[str] | None) -> List
     if not clean:
         raise SystemExit("symbol must be provided")
     return [clean]
+
+
+def _build_risk_config(args: argparse.Namespace) -> RiskConfig:
+    return RiskConfig(
+        long_only=not bool(getattr(args, "allow_short", False)),
+        max_weight=None if args.max_weight is None else float(args.max_weight),
+        exposure_cap=None if args.exposure_cap is None else float(args.exposure_cap),
+        min_cash=None if args.min_cash is None else float(args.min_cash),
+        max_turnover_1d=None if args.max_turnover_1d is None else float(args.max_turnover_1d),
+    )
 
 
 def main() -> int:
@@ -262,7 +278,8 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
     if len(rows) < 2:
         raise SystemExit("Not enough feature rows to train PPO.")
 
-    env_config = SignalWeightEnvConfig(transaction_cost_bp=args.transaction_cost_bp)
+    risk_config = _build_risk_config(args)
+    env_config = SignalWeightEnvConfig(transaction_cost_bp=args.transaction_cost_bp, risk_config=risk_config)
     train_env = GymWeightTradingEnv(rows, config=env_config, observation_columns=base_observation_columns)
     eval_env = GymWeightTradingEnv(rows, config=env_config, observation_columns=base_observation_columns)
     observation_headers = train_env.inner_env.observation_columns
@@ -295,6 +312,7 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         args.fast_window,
         args.slow_window,
         args.transaction_cost_bp,
+        risk_config,
         feature_set_name or args.feature_set,
         base_observation_columns,
     )
@@ -452,6 +470,7 @@ def build_train_report(
         "env_config": {
             "initial_cash": env_config.initial_cash,
             "transaction_cost_bp": env_config.transaction_cost_bp,
+            "risk_config": env_config.risk_config.to_dict(),
         },
         "features": {
             "fast_window": sma_config.fast_window,
@@ -518,6 +537,7 @@ def build_eval_report(
         "env_config": {
             "initial_cash": env_config.initial_cash,
             "transaction_cost_bp": env_config.transaction_cost_bp,
+            "risk_config": env_config.risk_config.to_dict(),
         },
         "features": {
             "fast_window": sma_config.fast_window,
@@ -545,6 +565,7 @@ def derive_run_id(
     fast_window: int,
     slow_window: int,
     transaction_cost_bp: float,
+    risk_config: RiskConfig,
     feature_set: str,
     observation_columns: Sequence[str],
 ) -> str:
@@ -561,6 +582,7 @@ def derive_run_id(
             "fast_window": fast_window,
             "slow_window": slow_window,
             "transaction_cost_bp": transaction_cost_bp,
+            "risk_config": risk_config.to_dict(),
             "canonical_hashes": {key: canonical_hashes[key] for key in sorted(canonical_hashes)},
             "feature_set": feature_set,
             "observation_columns": list(observation_columns),
@@ -576,6 +598,7 @@ def derive_run_id(
             "fast_window": fast_window,
             "slow_window": slow_window,
             "transaction_cost_bp": transaction_cost_bp,
+            "risk_config": risk_config.to_dict(),
             "canonical_hashes": {key: canonical_hashes[key] for key in sorted(canonical_hashes)},
             "feature_set": feature_set,
             "observation_columns": list(observation_columns),

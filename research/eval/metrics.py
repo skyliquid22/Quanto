@@ -7,6 +7,8 @@ import math
 from statistics import median
 from typing import Dict, List, Mapping, Sequence, Tuple, Literal
 
+from research.risk import PROJECTION_TOLERANCE, RiskConfig
+
 _DEFAULT_PRECISION = 10
 
 
@@ -19,12 +21,13 @@ class MetricConfig:
     risk_free_rate: float = 0.0
     float_precision: int = _DEFAULT_PRECISION
     turnover_tolerance: float = 1e-12
+    risk_config: RiskConfig | None = None
 
 
 @dataclass(frozen=True)
 class MetricResult:
     performance: Dict[str, float | None]
-    trading: Dict[str, float]
+    trading: Dict[str, object]
     safety: Dict[str, float]
     returns: List[float]
 
@@ -58,8 +61,13 @@ METRIC_SCHEMA: Tuple[MetricSchemaEntry, ...] = (
     MetricSchemaEntry("hhi_mean", "trading", "lower_is_better", "ratio", "Mean Herfindahl-Hirschman index."),
     MetricSchemaEntry("tx_cost_total", "trading", "lower_is_better", "currency", "Total transaction costs."),
     MetricSchemaEntry("tx_cost_bps", "trading", "lower_is_better", "bps", "Transaction costs in basis points."),
+    MetricSchemaEntry("avg_cash", "trading", "neutral", "ratio", "Average idle cash allocation."),
     MetricSchemaEntry("nan_inf_violations", "safety", "lower_is_better", "count", "Number of NaN/Inf values detected."),
     MetricSchemaEntry("action_bounds_violations", "safety", "lower_is_better", "count", "Invalid action magnitudes."),
+    MetricSchemaEntry("constraint_violations_count", "safety", "lower_is_better", "count", "Total constraint violations detected post-projection."),
+    MetricSchemaEntry("max_weight_violation_count", "safety", "lower_is_better", "count", "Per-asset cap violations."),
+    MetricSchemaEntry("exposure_violation_count", "safety", "lower_is_better", "count", "Exposure cap or min cash violations."),
+    MetricSchemaEntry("turnover_violation_count", "safety", "lower_is_better", "count", "Turnover cap violations."),
 )
 
 
@@ -76,14 +84,26 @@ def compute_metric_bundle(
     transaction_costs: Sequence[float] | None = None,
     symbols: Sequence[str] | None = None,
     config: MetricConfig | None = None,
+    regime_feature_series: Sequence[Sequence[float]] | None = None,
+    regime_feature_names: Sequence[str] | None = None,
 ) -> MetricResult:
     """Compute portfolio, trading, and safety metrics."""
 
     cfg = config or MetricConfig()
     returns = _simple_returns(account_values)
     perf = _performance_metrics(account_values, returns, cfg)
-    trading = _trading_metrics(account_values, weights, transaction_costs, symbols or (), cfg)
+    trading, constraint_diag = _trading_metrics(
+        account_values,
+        weights,
+        transaction_costs,
+        symbols or (),
+        cfg,
+        regime_feature_series,
+        regime_feature_names,
+    )
     safety = _safety_checks(account_values, weights, returns, transaction_costs)
+    for key, value in constraint_diag.items():
+        safety[key] = float(value)
     rounded_returns = [_round(value, cfg.float_precision) for value in returns]
     return MetricResult(performance=perf, trading=trading, safety=safety, returns=rounded_returns)
 
@@ -138,12 +158,15 @@ def _trading_metrics(
     transaction_costs: Sequence[float] | None,
     symbols: Sequence[str],
     cfg: MetricConfig,
-) -> Dict[str, float]:
+    regime_feature_series: Sequence[Sequence[float]] | None,
+    regime_feature_names: Sequence[str] | None,
+) -> Tuple[Dict[str, float], Dict[str, float]]:
     symbol_order = tuple(dict.fromkeys(symbols))
     turnover_steps: List[float] = []
     exposures: List[float] = []
     concentrations: List[float] = []
     hhi_values: List[float] = []
+    turnover_by_step: List[float] = [0.0 for _ in weights]
     tolerance = cfg.turnover_tolerance
     resolved_weights = [_fill_weights(entry, symbol_order) for entry in weights]
     if not resolved_weights:
@@ -159,13 +182,18 @@ def _trading_metrics(
         keys = symbol_order or tuple(sorted(set(prev) | set(entry)))
         for symbol in keys:
             total += abs(entry.get(symbol, 0.0) - prev.get(symbol, 0.0))
-        turnover_steps.append(total if total > tolerance else 0.0)
+        turnover_value = total if total > tolerance else 0.0
+        turnover_steps.append(turnover_value)
+        if idx < len(turnover_by_step):
+            turnover_by_step[idx] = turnover_value
     tx_costs = list(transaction_costs or [])
     tx_total = sum(float(value) for value in tx_costs)
     avg_account = _mean(account_values)
     tx_bps = (tx_total / avg_account * 1e4) if avg_account else 0.0
+    constraint_diag = _constraint_diagnostics(resolved_weights, cfg.risk_config, cfg.turnover_tolerance)
+    avg_cash = constraint_diag.pop("_avg_cash", 0.0)
     precision = cfg.float_precision
-    return {
+    trading_metrics = {
         "turnover_1d_mean": _round(_mean(turnover_steps), precision),
         "turnover_1d_median": _round(median(turnover_steps) if turnover_steps else 0.0, precision),
         "avg_exposure": _round(_mean(exposures), precision),
@@ -173,7 +201,17 @@ def _trading_metrics(
         "hhi_mean": _round(_mean(hhi_values), precision),
         "tx_cost_total": _round(tx_total, precision),
         "tx_cost_bps": _round(tx_bps, precision),
+        "avg_cash": _round(avg_cash, precision),
     }
+    regime_diag = _regime_diagnostics(
+        regime_feature_series,
+        regime_feature_names,
+        exposures,
+        turnover_by_step,
+        precision,
+    )
+    trading_metrics.update(regime_diag)
+    return trading_metrics, constraint_diag
 
 
 def _safety_checks(
@@ -204,6 +242,119 @@ def _safety_checks(
         "nan_inf_violations": float(nan_inf),
         "action_bounds_violations": float(action_violations),
     }
+
+
+def _constraint_diagnostics(
+    weights: Sequence[Mapping[str, float]],
+    risk_config: RiskConfig | None,
+    turnover_tolerance: float,
+) -> Dict[str, float]:
+    cfg = risk_config or RiskConfig()
+    long_only_count = 0
+    max_weight_count = 0
+    exposure_count = 0
+    turnover_count = 0
+    cash_levels: List[float] = []
+    exposure_cap = None
+    if cfg.exposure_cap is not None or cfg.min_cash is not None:
+        caps: List[float] = []
+        if cfg.exposure_cap is not None:
+            caps.append(max(cfg.exposure_cap, 0.0))
+        if cfg.min_cash is not None:
+            caps.append(max(0.0, 1.0 - cfg.min_cash))
+        if caps:
+            exposure_cap = min(caps)
+    prev_entry: Mapping[str, float] | None = None
+    for entry in weights:
+        total = sum(entry.values())
+        cash_levels.append(max(0.0, 1.0 - total))
+        if cfg.long_only:
+            for value in entry.values():
+                if value < -PROJECTION_TOLERANCE:
+                    long_only_count += 1
+        if cfg.max_weight is not None:
+            limit = cfg.max_weight + PROJECTION_TOLERANCE
+            for value in entry.values():
+                if value > limit:
+                    max_weight_count += 1
+        if exposure_cap is not None and total > exposure_cap + PROJECTION_TOLERANCE:
+            exposure_count += 1
+        if prev_entry is not None and cfg.max_turnover_1d is not None:
+            turnover = 0.0
+            keys = set(prev_entry) | set(entry)
+            for symbol in keys:
+                turnover += abs(entry.get(symbol, 0.0) - prev_entry.get(symbol, 0.0))
+            if turnover > cfg.max_turnover_1d + max(turnover_tolerance, PROJECTION_TOLERANCE):
+                turnover_count += 1
+        prev_entry = entry
+    constraint_total = long_only_count + max_weight_count + exposure_count
+    if cfg.max_turnover_1d is not None:
+        constraint_total += turnover_count
+    diag = {
+        "constraint_violations_count": float(constraint_total),
+        "max_weight_violation_count": float(max_weight_count),
+        "exposure_violation_count": float(exposure_count),
+        "turnover_violation_count": float(turnover_count),
+        "_avg_cash": _mean(cash_levels),
+    }
+    return diag
+
+
+def _regime_diagnostics(
+    regime_series: Sequence[Sequence[float]] | None,
+    feature_names: Sequence[str] | None,
+    exposures: Sequence[float],
+    turnover_by_step: Sequence[float],
+    precision: int,
+) -> Dict[str, object]:
+    diagnostics: Dict[str, object] = {
+        "avg_exposure_by_regime": {},
+        "avg_turnover_by_regime": {},
+        "regime_feature_summary": {},
+    }
+    if not regime_series or not feature_names:
+        return diagnostics
+    names = tuple(feature_names)
+    available = min(len(regime_series), len(exposures), len(turnover_by_step))
+    if available == 0:
+        return diagnostics
+    trimmed_regime = [tuple(float(value) for value in regime_series[idx]) for idx in range(available)]
+    trimmed_exposure = [float(exposures[idx]) for idx in range(available)]
+    trimmed_turnover = [float(turnover_by_step[idx]) for idx in range(available)]
+    exposure_diag: Dict[str, Dict[str, float]] = {}
+    turnover_diag: Dict[str, Dict[str, float]] = {}
+    summary_diag: Dict[str, Dict[str, float]] = {}
+
+    for feature_idx, name in enumerate(names):
+        column = [entry[feature_idx] if feature_idx < len(entry) else 0.0 for entry in trimmed_regime]
+        if not column:
+            exposure_diag[name] = {"low": 0.0, "high": 0.0}
+            turnover_diag[name] = {"low": 0.0, "high": 0.0}
+            summary_diag[name] = {"mean": 0.0, "stdev": 0.0}
+            continue
+        pivot = median(column)
+        low_indices = [idx for idx, value in enumerate(column) if value <= pivot]
+        high_indices = [idx for idx, value in enumerate(column) if value > pivot]
+        low_exposure = _mean([trimmed_exposure[idx] for idx in low_indices]) if low_indices else 0.0
+        high_exposure = _mean([trimmed_exposure[idx] for idx in high_indices]) if high_indices else low_exposure
+        low_turnover = _mean([trimmed_turnover[idx] for idx in low_indices]) if low_indices else 0.0
+        high_turnover = _mean([trimmed_turnover[idx] for idx in high_indices]) if high_indices else low_turnover
+        exposure_diag[name] = {
+            "low": _round(low_exposure, precision),
+            "high": _round(high_exposure, precision),
+        }
+        turnover_diag[name] = {
+            "low": _round(low_turnover, precision),
+            "high": _round(high_turnover, precision),
+        }
+        summary_diag[name] = {
+            "mean": _round(_mean(column), precision),
+            "stdev": _round(_std(column), precision),
+        }
+    diagnostics["avg_exposure_by_regime"] = exposure_diag
+    diagnostics["avg_turnover_by_regime"] = turnover_diag
+    diagnostics["regime_feature_summary"] = summary_diag
+    return diagnostics
 
 
 def _simple_returns(account_values: Sequence[float]) -> List[float]:
@@ -245,6 +396,14 @@ def _mean(values: Sequence[float]) -> float:
     if not values:
         return 0.0
     return float(sum(values) / len(values))
+
+
+def _std(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+    mean_value = _mean(values)
+    variance = sum((value - mean_value) ** 2 for value in values) / len(values)
+    return math.sqrt(max(variance, 0.0))
 
 
 def _fill_weights(entry: Mapping[str, float], symbols: Sequence[str]) -> Dict[str, float]:

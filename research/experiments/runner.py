@@ -68,6 +68,7 @@ def run_experiment(
         {
             "experiment_id": experiment_id,
             "policy": spec.policy,
+            "regime_feature_set": spec.regime_feature_set,
             "metrics_path": str(metrics_path),
             "runs_dir": str(paths.runs_dir),
             "evaluation_dir": str(paths.evaluation_dir),
@@ -136,6 +137,7 @@ def _run_training(spec: ExperimentSpec, data_root: Path) -> Mapping[str, Any]:
     gamma = float(params.get("gamma", 0.99))
     policy_id = str(params.get("policy", "MlpPolicy"))
 
+    risk_cfg = spec.risk_config
     args = argparse.Namespace(
         symbol=spec.symbols[0],
         symbols=list(spec.symbols) if len(spec.symbols) > 1 else None,
@@ -153,12 +155,18 @@ def _run_training(spec: ExperimentSpec, data_root: Path) -> Mapping[str, Any]:
         policy=policy_id,
         run_id=spec.experiment_id,
         data_root=str(data_root),
+        regime_feature_set=spec.regime_feature_set,
         vendor="polygon",
         live=False,
         ingest_mode="rest",
         canonical_domain="equity_ohlcv",
         force_ingest=False,
         force_canonical_build=False,
+        max_weight=risk_cfg.max_weight,
+        exposure_cap=risk_cfg.exposure_cap,
+        min_cash=risk_cfg.min_cash,
+        max_turnover_1d=risk_cfg.max_turnover_1d,
+        allow_short=not risk_cfg.long_only,
     )
     try:
         return train_ppo_cli(args)
@@ -216,6 +224,7 @@ def _run_evaluation(
 
     DEFAULT_FAST = 20
     DEFAULT_SLOW = 50
+    risk_cfg = spec.risk_config
 
     if policy == "sma":
         fast_window = _optional_int(params, "fast_window") or DEFAULT_FAST
@@ -243,6 +252,7 @@ def _run_evaluation(
         end_date=spec.end_date.isoformat(),
         interval=spec.interval,
         feature_set=spec.feature_set,
+        regime_feature_set=spec.regime_feature_set,
         policy=policy,
         fast_window=fast_window,
         slow_window=slow_window,
@@ -253,6 +263,11 @@ def _run_evaluation(
         data_root=str(data_root),
         out_dir=str(evaluation_dir),
         run_id=spec.experiment_id,
+        max_weight=risk_cfg.max_weight,
+        exposure_cap=risk_cfg.exposure_cap,
+        min_cash=risk_cfg.min_cash,
+        max_turnover_1d=risk_cfg.max_turnover_1d,
+        allow_short=not risk_cfg.long_only,
     )
     try:
         summary = evaluate_cli(args)

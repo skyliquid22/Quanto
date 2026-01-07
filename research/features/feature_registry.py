@@ -7,6 +7,8 @@ from datetime import date
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Sequence, Tuple
 
+import numpy as np
+
 from infra.paths import get_data_root
 
 try:  # pragma: no cover - pandas optional in some environments
@@ -20,6 +22,8 @@ else:  # pragma: no cover
 from research.datasets.canonical_options_loader import CanonicalOptionData, load_canonical_options
 from research.features.equity_xsec_features_v1 import EQUITY_XSEC_OBSERVATION_COLUMNS
 from research.features.options_features_v1 import OPTION_FEATURE_COLUMNS, compute_options_features
+from research.features.regime_features_v1 import REGIME_FEATURE_COLUMNS, compute_regime_features
+from research.regime import RegimeState
 from research.strategies.sma_crossover import SMAStrategyResult
 
 SMA_OBSERVATION_COLUMNS = ("close", "sma_fast", "sma_slow", "sma_diff", "sma_signal")
@@ -60,6 +64,11 @@ class _FeatureSetSpec:
 _UNIVERSE_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "equity_xsec_v1": EQUITY_XSEC_OBSERVATION_COLUMNS,
     "sma_plus_xsec_v1": SMA_PLUS_XSEC_OBSERVATION_COLUMNS,
+    "sma_plus_regime_v1": SMA_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
+    "xsec_plus_regime_v1": EQUITY_XSEC_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
+}
+_REGIME_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
+    "regime_v1": REGIME_FEATURE_COLUMNS,
 }
 
 
@@ -142,6 +151,20 @@ def normalize_feature_set_name(feature_set: str) -> str:
     return name
 
 
+def normalize_regime_feature_set_name(regime_feature_set: str) -> str:
+    name = normalize_feature_set_name(regime_feature_set)
+    if name not in _REGIME_FEATURE_OBSERVATION_COLUMNS:
+        raise ValueError(f"Unknown regime feature set '{regime_feature_set}'")
+    return name
+
+
+def is_regime_feature_set(regime_feature_set: str | None) -> bool:
+    if not regime_feature_set:
+        return False
+    normalized = normalize_feature_set_name(regime_feature_set)
+    return normalized in _REGIME_FEATURE_OBSERVATION_COLUMNS
+
+
 def is_universe_feature_set(feature_set: str) -> bool:
     normalized = normalize_feature_set_name(feature_set)
     return normalized in _UNIVERSE_FEATURE_OBSERVATION_COLUMNS
@@ -153,6 +176,8 @@ def observation_columns_for_feature_set(feature_set: str) -> Tuple[str, ...]:
         return _FEATURE_REGISTRY[normalized].observation_columns
     if normalized in _UNIVERSE_FEATURE_OBSERVATION_COLUMNS:
         return _UNIVERSE_FEATURE_OBSERVATION_COLUMNS[normalized]
+    if normalized in _REGIME_FEATURE_OBSERVATION_COLUMNS:
+        return _REGIME_FEATURE_OBSERVATION_COLUMNS[normalized]
     raise ValueError(f"Unknown feature set '{feature_set}'")
 
 
@@ -225,6 +250,12 @@ def _ensure_pandas_available() -> None:
         raise RuntimeError("pandas is required for feature registry operations") from _PANDAS_ERROR
 
 
+def _normalize_regime_feature_set(name: str | None) -> str | None:
+    if not name:
+        return None
+    return normalize_regime_feature_set_name(name)
+
+
 def build_universe_feature_panel(
     feature_results: Mapping[str, FeatureSetResult],
     *,
@@ -232,6 +263,7 @@ def build_universe_feature_panel(
     calendar: "pd.DatetimeIndex | Sequence[object] | None" = None,
     forward_fill_limit: int = 3,
     fill_value: float = 0.0,
+    regime_feature_set: str | None = None,
 ) -> UniverseFeaturePanel:
     """Align feature frames for multiple symbols on a shared calendar."""
 
@@ -244,6 +276,9 @@ def build_universe_feature_panel(
     missing = [symbol for symbol in order if symbol not in feature_results]
     if missing:
         raise ValueError(f"feature_results missing symbols: {missing}")
+    normalized_regime = _normalize_regime_feature_set(regime_feature_set)
+    if normalized_regime and len(order) < 2:
+        raise ValueError("Regime features require at least two symbols")
     base_columns: Tuple[str, ...] | None = None
     union_index: "pd.DatetimeIndex | None" = None
     if calendar is not None:
@@ -288,6 +323,19 @@ def build_universe_feature_panel(
     valid_index = union_index[valid_mask.to_numpy()]
     if len(valid_index) < 2:
         raise ValueError("Universe alignment requires at least two overlapping timestamps")
+    regime_columns: Tuple[str, ...] = tuple()
+    regime_states: Dict[pd.Timestamp, RegimeState] = {}
+    if normalized_regime:
+        regime_columns = _REGIME_FEATURE_OBSERVATION_COLUMNS[normalized_regime]
+        close_panel = pd.DataFrame(index=valid_index)
+        for symbol in order:
+            aligned = normalized_frames[symbol]
+            close_series = aligned.loc[valid_index, "close"].astype(float)
+            close_panel[symbol] = close_series
+        regime_frame = compute_regime_features(close_panel)
+        for timestamp in valid_index:
+            values = [float(regime_frame.at[timestamp, column]) for column in regime_columns]
+            regime_states[timestamp] = RegimeState(features=np.asarray(values, dtype="float64"), feature_names=regime_columns)
     rows: List[Dict[str, object]] = []
     fill_number = float(fill_value)
     for timestamp in valid_index:
@@ -301,8 +349,14 @@ def build_universe_feature_panel(
                     value = fill_number
                 features[column] = float(value)
             panel[symbol] = features
-        rows.append({"timestamp": timestamp.to_pydatetime(), "panel": panel})
-    return UniverseFeaturePanel(rows=rows, symbol_order=order, observation_columns=base_columns or tuple())
+        payload: Dict[str, object] = {"timestamp": timestamp.to_pydatetime(), "panel": panel}
+        if regime_states:
+            payload["regime_state"] = regime_states[timestamp]
+        rows.append(payload)
+    observation_columns = base_columns or tuple()
+    if regime_columns:
+        observation_columns = observation_columns + regime_columns
+    return UniverseFeaturePanel(rows=rows, symbol_order=order, observation_columns=observation_columns)
 
 
 _FEATURE_REGISTRY: Dict[str, _FeatureSetSpec] = {
@@ -344,6 +398,8 @@ __all__ = [
     "SMA_PLUS_XSEC_OBSERVATION_COLUMNS",
     "EQUITY_XSEC_OBSERVATION_COLUMNS",
     "normalize_feature_set_name",
+    "normalize_regime_feature_set_name",
     "is_universe_feature_set",
+    "is_regime_feature_set",
     "observation_columns_for_feature_set",
 ]

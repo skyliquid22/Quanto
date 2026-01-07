@@ -40,6 +40,7 @@ from research.policies.sma_weight_policy import SMAWeightPolicy, SMAWeightPolicy
 from research.runners.rollout import run_rollout
 from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossover
 from research.training.ppo_trainer import EvaluationResult, evaluate as ppo_evaluate
+from research.risk import RiskConfig
 from scripts.run_sma_finrl_rollout import ensure_yearly_daily_coverage
 
 
@@ -60,6 +61,11 @@ _CONFIG_KEYS = {
     "data_root",
     "out_dir",
     "run_id",
+    "max_weight",
+    "exposure_cap",
+    "min_cash",
+    "max_turnover_1d",
+    "allow_short",
 }
 
 
@@ -108,6 +114,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--sigmoid-scale", type=float, default=5.0, help="Sigmoid scale for SMA policy.")
     parser.add_argument("--transaction-cost-bp", type=float, default=1.0, help="Transaction cost in basis points.")
+    parser.add_argument("--max-weight", type=float, default=1.0, help="Per-asset weight cap enforced post-projection.")
+    parser.add_argument("--exposure-cap", type=float, default=1.0, help="Total exposure cap enforced post-projection.")
+    parser.add_argument("--min-cash", type=float, default=0.0, help="Minimum cash allocation (1 - max exposure).")
+    parser.add_argument("--max-turnover-1d", type=float, help="Optional 1-day L1 turnover cap.")
+    parser.add_argument("--allow-short", action="store_true", help="Disable the long-only projection step.")
     parser.add_argument("--checkpoint", help="Path to PPO checkpoint when --policy=ppo.")
     parser.add_argument("--data-root", help="Override QUANTO data root.")
     parser.add_argument("--out-dir", help="Destination directory for metrics.json.")
@@ -140,6 +151,7 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
 
     data_root = resolve_data_root(args.data_root)
     os.environ["QUANTO_DATA_ROOT"] = str(data_root)
+    risk_config = _build_risk_config(args)
 
     auto_build = len(symbols) > 1
     ensure_yearly_daily_coverage(
@@ -170,7 +182,7 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
     combined_hashes = dict(canonical_hashes)
     combined_hashes.update(feature_hashes)
 
-    env_config = SignalWeightEnvConfig(transaction_cost_bp=args.transaction_cost_bp)
+    env_config = SignalWeightEnvConfig(transaction_cost_bp=args.transaction_cost_bp, risk_config=risk_config)
     policy_id, policy_details, rollout_series, inputs_used = _run_policy_rollout(
         args=args,
         symbols=symbols,
@@ -211,7 +223,7 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
         rollout_series,
         metadata,
         inputs_used=inputs_used,
-        config=MetricConfig(),
+        config=MetricConfig(risk_config=risk_config),
     )
     out_dir = Path(args.out_dir) if args.out_dir else data_root / "monitoring" / "eval"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -454,6 +466,16 @@ def resolve_data_root(arg_root: str | None) -> Path:
     return default_data_root()
 
 
+def _build_risk_config(args: argparse.Namespace) -> RiskConfig:
+    return RiskConfig(
+        long_only=not bool(getattr(args, "allow_short", False)),
+        max_weight=None if args.max_weight is None else float(args.max_weight),
+        exposure_cap=None if args.exposure_cap is None else float(args.exposure_cap),
+        min_cash=None if args.min_cash is None else float(args.min_cash),
+        max_turnover_1d=None if args.max_turnover_1d is None else float(args.max_turnover_1d),
+    )
+
+
 def _derive_run_id(
     symbols: Sequence[str],
     start: date,
@@ -474,6 +496,7 @@ def _derive_run_id(
         "policy_id": policy_id,
         "transaction_cost_bp": env_config.transaction_cost_bp,
         "policy": dict(policy_details),
+        "risk_config": env_config.risk_config.to_dict(),
         "inputs_used": {key: inputs_used[key] for key in sorted(inputs_used)},
     }
     digest = hashlib.sha256(
@@ -516,6 +539,7 @@ def _build_rollout_metadata(
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
         "transaction_cost_bp": env_config.transaction_cost_bp,
+        "risk_config": env_config.risk_config.to_dict(),
         "feature_set": feature_set,
         "observation_columns": list(observation_columns),
         "sma_config": {

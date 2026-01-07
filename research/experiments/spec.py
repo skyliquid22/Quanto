@@ -13,6 +13,9 @@ try:  # pragma: no cover - yaml optional in some envs
 except Exception:  # pragma: no cover
     yaml = None  # type: ignore[assignment]
 
+from research.risk import RiskConfig
+from research.features.feature_registry import normalize_regime_feature_set_name
+
 
 @dataclass(frozen=True)
 class CostConfig:
@@ -42,7 +45,9 @@ class ExperimentSpec:
     policy_params: Mapping[str, Any]
     cost_config: CostConfig
     seed: int
+    risk_config: RiskConfig = RiskConfig()
     notes: str | None = None
+    regime_feature_set: str | None = None
 
     @classmethod
     def from_file(cls, path: str | Path) -> ExperimentSpec:
@@ -74,12 +79,17 @@ class ExperimentSpec:
             raise ValueError("policy must be one of: equal_weight, sma, ppo")
         policy_params = _normalize_mapping(payload.get("policy_params") or {})
         cost_config = _build_cost_config(payload.get("cost_config"))
+        risk_config = _build_risk_config(payload.get("risk_config"))
         seed = _coerce_int(payload.get("seed"), "seed")
         notes = payload.get("notes")
         normalized_notes = None
         if notes is not None:
             notes_str = str(notes).strip()
             normalized_notes = notes_str if notes_str else None
+        regime_feature_set = payload.get("regime_feature_set")
+        normalized_regime = None
+        if regime_feature_set:
+            normalized_regime = normalize_regime_feature_set_name(str(regime_feature_set))
         return cls(
             experiment_name=experiment_name,
             symbols=symbols,
@@ -90,8 +100,10 @@ class ExperimentSpec:
             policy=policy,
             policy_params=policy_params,
             cost_config=cost_config,
+            risk_config=risk_config,
             seed=seed,
             notes=normalized_notes,
+            regime_feature_set=normalized_regime,
         )
 
     @property
@@ -103,9 +115,11 @@ class ExperimentSpec:
             "end_date": self.end_date.isoformat(),
             "interval": self.interval,
             "feature_set": self.feature_set,
+            "regime_feature_set": self.regime_feature_set or "",
             "policy": self.policy,
             "policy_params": _canonicalize(self.policy_params),
             "cost_config": self.cost_config.to_dict(),
+            "risk_config": self.risk_config.to_dict(),
             "seed": int(self.seed),
             "notes": self.notes or "",
         }
@@ -126,6 +140,8 @@ class ExperimentSpec:
         payload = dict(self.canonical_dict)
         if self.notes is None:
             payload.pop("notes", None)
+        if self.regime_feature_set is None:
+            payload.pop("regime_feature_set", None)
         return payload
 
 
@@ -229,6 +245,27 @@ def _build_cost_config(payload: Any) -> CostConfig:
     return CostConfig(transaction_cost_bp=transaction_cost, slippage_bp=slippage_value)
 
 
+def _build_risk_config(payload: Any) -> RiskConfig:
+    if payload is None:
+        return RiskConfig()
+    if not isinstance(payload, Mapping):
+        raise ValueError("risk_config must be provided as a mapping when present.")
+    params: Dict[str, Any] = {}
+    if "long_only" in payload:
+        params["long_only"] = bool(payload["long_only"])
+    if "max_weight" in payload:
+        params["max_weight"] = None if payload["max_weight"] is None else float(payload["max_weight"])
+    if "exposure_cap" in payload:
+        params["exposure_cap"] = None if payload["exposure_cap"] is None else float(payload["exposure_cap"])
+    if "min_cash" in payload:
+        params["min_cash"] = None if payload["min_cash"] is None else float(payload["min_cash"])
+    if "max_turnover_1d" in payload:
+        params["max_turnover_1d"] = (
+            None if payload["max_turnover_1d"] is None else float(payload["max_turnover_1d"])
+        )
+    return RiskConfig(**params)
+
+
 def _canonicalize(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {key: _canonicalize(value[key]) for key in sorted(value)}
@@ -243,4 +280,4 @@ def _sha256_hex(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-__all__ = ["CostConfig", "ExperimentSpec"]
+__all__ = ["CostConfig", "ExperimentSpec", "RiskConfig"]
