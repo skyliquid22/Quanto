@@ -80,7 +80,13 @@ class GymWeightTradingEnv(GymBase):
         self._inner = SignalWeightTradingEnv(rows, config=config, observation_columns=observation_columns)
         obs_dim = len(self._inner.observation_columns)
         self.observation_space = Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
-        self.action_space = Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
+        low, high = self._inner.config.action_clip
+        self.action_space = Box(
+            low=low,
+            high=high,
+            shape=(self._inner.num_assets,),
+            dtype=np.float32,
+        )
         self._return_info = GYM_STYLE == "gymnasium"
 
     @property
@@ -95,13 +101,18 @@ class GymWeightTradingEnv(GymBase):
         return (obs, info) if self._return_info else obs
 
     def step(self, action):
-        clipped_action = float(np.clip(action, 0.0, 1.0))
-        result = self._inner.step(clipped_action)
+        arr = np.asarray(action, dtype=np.float32).reshape(-1)
+        if arr.size == 0:
+            raise ValueError("action must contain at least one value")
+        if arr.size == 1 and self._inner.num_assets > 1:
+            arr = np.repeat(arr, self._inner.num_assets)
+        clipped = np.clip(arr, self.action_space.low, self.action_space.high)
+        result = self._inner.step(clipped.tolist() if clipped.size > 1 else float(clipped[0]))
         obs, reward, done, info = result
         obs_array = np.asarray(obs, dtype=np.float32)
         info_dict = dict(info)
         if "weight_target" not in info_dict:
-            info_dict["weight_target"] = clipped_action
+            info_dict["weight_target"] = clipped.tolist() if clipped.size > 1 else float(clipped[0])
         if "weight_realized" not in info_dict:
             info_dict["weight_realized"] = info_dict["weight_target"]
         if self._return_info:

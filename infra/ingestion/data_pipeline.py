@@ -33,10 +33,14 @@ class EquityIngestionPipeline:
         router: IngestionRouter | None = None,
         raw_writer: RawEquityOHLCVWriter | None = None,
         manifest_dir: Path | str | None = None,
+        raw_shard_yearly_daily: bool | None = None,
     ) -> None:
         self.adapter = adapter
         self.router = router or IngestionRouter()
-        self.raw_writer = raw_writer or RawEquityOHLCVWriter()
+        if raw_writer:
+            self.raw_writer = raw_writer
+        else:
+            self.raw_writer = RawEquityOHLCVWriter(shard_yearly_daily=raw_shard_yearly_daily)
         manifest_base = manifest_dir if manifest_dir is not None else default_equity_manifest_dir()
         self.manifest_dir = Path(manifest_base)
 

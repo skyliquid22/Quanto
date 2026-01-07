@@ -6,11 +6,14 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Sequence
+import sys
 
 from infra.paths import get_data_root, get_repo_root, raw_root, validation_manifest_root
 from infra.storage.parquet import write_parquet_atomic
+from infra.storage.parquet_writer import merge_write_parquet, write_normalized_parquet
 
 try:  # pragma: no cover - optional dependency chain
     import pyarrow.parquet as pq  # type: ignore
@@ -123,8 +126,8 @@ class ReconciliationBuilder:
         self.default_allowed_statuses: Sequence[str] = tuple(
             reconciliation_cfg.get("allowed_validation_statuses", ["passed"])
         )
-        self.raw_data_root = Path(raw_data_root) if raw_data_root else raw_root()
-        self.canonical_root = Path(canonical_root) if canonical_root else get_data_root() / "canonical"
+        self.raw_data_root = _resolve_runtime_root(Path(raw_data_root)) if raw_data_root else raw_root()
+        self.canonical_root = _resolve_runtime_root(Path(canonical_root), layer="canonical") if canonical_root else get_data_root() / "canonical"
         self.validation_manifest_root = (
             Path(validation_manifest_root_path)
             if validation_manifest_root_path
@@ -286,13 +289,59 @@ class ReconciliationBuilder:
         manifests = self._load_manifests("equity_ohlcv")
         for vendor in vendor_priority:
             manifest = manifests.get(vendor)
-            if not manifest:
-                continue
+            manifest_missing = manifest is None
             vendor_root = self.raw_data_root / vendor / "equity_ohlcv"
             if not vendor_root.exists():
                 continue
+            if manifest_missing:
+                manifest = ManifestInfo(
+                    vendor=vendor,
+                    path=vendor_root / "manifests" / "missing_manifest.json",
+                    payload={"source_vendor": vendor, "domain": "equity_ohlcv", "run_id": "unknown"},
+                    creation_timestamp="",
+                )
             records: Dict[tuple[str, str], Dict[str, Any]] = {}
             files: List[Dict[str, Any]] = []
+            years = range(start.year, end.year + 1)
+            # Prefer yearly shards when present (daily interval).
+            for symbol_dir in vendor_root.iterdir():
+                if not symbol_dir.is_dir():
+                    continue
+                daily_dir = symbol_dir / "daily"
+                if not daily_dir.exists():
+                    continue
+                for year in years:
+                    yearly_path = daily_dir / f"{year}.parquet"
+                    if not yearly_path.exists():
+                        continue
+                    raw_records = self._read_records(yearly_path)
+                    file_hash = compute_file_hash(yearly_path)
+                    files.append({"path": str(yearly_path), "file_hash": file_hash, "records": len(raw_records)})
+                    for row in raw_records:
+                        normalized = dict(row)
+                        normalized_symbol = str(normalized.get("symbol") or symbol_dir.name)
+                        normalized_ts = self._resolve_timestamp(normalized)
+                        partition_day = normalized_ts[:10]
+                        partition_date = date.fromisoformat(partition_day)
+                        if not (start <= partition_date <= end):
+                            continue
+                        normalized["symbol"] = normalized_symbol
+                        normalized["timestamp"] = normalized_ts
+                        normalized["source_vendor"] = vendor
+                        normalized["__partition_day"] = partition_day
+                        normalized["__input_file_hash"] = file_hash
+                        key = (normalized_symbol, normalized_ts)
+                        if key not in records:
+                            records[key] = normalized
+            if records:
+                snapshots[vendor] = VendorSnapshot(manifest=manifest, records_by_key=records, files=files)
+                if manifest_missing:
+                    print(
+                        f"Warning: no validation manifest found for vendor '{vendor}'. "
+                        "Using raw files without manifest metadata.",
+                        file=sys.stderr,
+                    )
+                continue
             for file_path in vendor_root.glob("*/daily/*/*/*.parquet"):
                 partition_day = self._parse_daily_partition(file_path)
                 if not partition_day or not (start <= partition_day <= end):
@@ -304,7 +353,7 @@ class ReconciliationBuilder:
                 for row in raw_records:
                     normalized = dict(row)
                     normalized["symbol"] = str(normalized.get("symbol") or symbol)
-                    normalized["timestamp"] = self._normalize_timestamp(normalized.get("timestamp"))
+                    normalized["timestamp"] = self._resolve_timestamp(normalized)
                     normalized["source_vendor"] = vendor
                     normalized["__partition_day"] = partition_day.isoformat()
                     normalized["__input_file_hash"] = file_hash
@@ -430,26 +479,33 @@ class ReconciliationBuilder:
         )
 
     def _write_equity_outputs(self, records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+        return self._write_equity_outputs_yearly(records)
+
+    def _write_equity_outputs_yearly(self, records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         grouped: MutableMapping[tuple[str, str], List[Mapping[str, Any]]] = defaultdict(list)
         for record in records:
             symbol = str(record["symbol"])
-            timestamp = str(record["timestamp"])[:10]
-            grouped[(symbol, timestamp)].append(record)
+            timestamp = str(record["timestamp"])
+            year = timestamp[:4]
+            grouped[(symbol, year)].append(record)
         outputs: List[Dict[str, Any]] = []
-        for (symbol, iso_day), entries in grouped.items():
-            year, month, day = iso_day.split("-")
-            path = (
-                self.canonical_root
-                / "equity_ohlcv"
-                / symbol
-                / "daily"
-                / year
-                / month
-                / f"{day}.parquet"
+        for (symbol, year), entries in grouped.items():
+            base_dir = self.canonical_root / "equity_ohlcv" / symbol / "daily"
+            path = base_dir / f"{year}.parquet"
+            if path.parent != base_dir:
+                raise ValueError(f"Unexpected canonical path layout: {path}")
+            dedup_cols = ["symbol", "timestamp"]
+            if entries and "source_vendor" in entries[0]:
+                dedup_cols.append("source_vendor")
+            result = merge_write_parquet(path, entries, dedup_cols=dedup_cols, sort_key="timestamp")
+            outputs.append(
+                {
+                    "path": str(path),
+                    "file_hash": result["file_hash"],
+                    "content_hash": result["content_hash"],
+                    "records": result.get("records", len(entries)),
+                }
             )
-            ordered = sorted(entries, key=lambda item: item["timestamp"])
-            result = write_parquet_atomic(ordered, path)
-            outputs.append({"path": str(path), "file_hash": result["file_hash"], "records": len(ordered)})
         outputs.sort(key=lambda item: item["path"])
         return outputs
 
@@ -836,22 +892,38 @@ class ReconciliationBuilder:
         return [str(v) for v in vendors]
 
     def _load_manifests(self, domain: str) -> Dict[str, ManifestInfo]:
-        directory = self.validation_manifest_root / domain
-        if not directory.exists():
-            return {}
         manifests: Dict[str, ManifestInfo] = {}
-        for manifest_path in sorted(directory.glob("*.json")):
-            payload = json.loads(manifest_path.read_text())
-            status = payload.get("validation_status")
-            if status not in self.default_allowed_statuses:
+        seen_paths: set[Path] = set()
+        candidate_dirs = [self.validation_manifest_root / domain]
+        if self.raw_data_root.exists():
+            for vendor_dir in self.raw_data_root.iterdir():
+                if not vendor_dir.is_dir():
+                    continue
+                manifest_dir = vendor_dir / domain / "manifests"
+                candidate_dirs.append(manifest_dir)
+        for directory in candidate_dirs:
+            if not directory.exists():
                 continue
-            vendor = str(payload.get("source_vendor"))
-            if not vendor:
-                continue
-            timestamp = str(payload.get("creation_timestamp") or "")
-            existing = manifests.get(vendor)
-            if existing is None or timestamp >= existing.creation_timestamp:
-                manifests[vendor] = ManifestInfo(vendor=vendor, path=manifest_path, payload=payload, creation_timestamp=timestamp)
+            for manifest_path in sorted(directory.glob("*.json")):
+                if manifest_path in seen_paths:
+                    continue
+                seen_paths.add(manifest_path)
+                payload = json.loads(manifest_path.read_text())
+                status = payload.get("validation_status")
+                if status not in self.default_allowed_statuses:
+                    continue
+                vendor = str(payload.get("source_vendor") or manifest_path.parents[2].name)
+                if not vendor:
+                    continue
+                timestamp = str(payload.get("creation_timestamp") or "")
+                existing = manifests.get(vendor)
+                if existing is None or timestamp >= existing.creation_timestamp:
+                    manifests[vendor] = ManifestInfo(
+                        vendor=vendor,
+                        path=manifest_path,
+                        payload=payload,
+                        creation_timestamp=timestamp,
+                    )
         return manifests
 
     def _read_records(self, path: Path) -> List[Dict[str, Any]]:
@@ -884,6 +956,48 @@ class ReconciliationBuilder:
             return date(year, month, day)
         except Exception:
             return None
+
+    def _resolve_timestamp(self, record: Mapping[str, Any]) -> str:
+        value = record.get("timestamp")
+        if value is None:
+            raw = record.get("t")
+            if raw is None:
+                raise ValueError("timestamp field is required for OHLCV records")
+            if isinstance(raw, (int, float)):
+                seconds = float(raw)
+                if seconds > 1e12:
+                    seconds /= 1000.0
+                return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
+            if isinstance(raw, str) and raw.strip().isdigit():
+                digits = float(raw.strip())
+                if digits > 1e12:
+                    digits /= 1000.0
+                return datetime.fromtimestamp(digits, tz=UTC).isoformat()
+            value = raw
+        return self._normalize_timestamp(value)
+
+    def _resolve_timestamp(self, record: Mapping[str, Any]) -> str:
+        value = record.get("timestamp")
+        if value is None:
+            raw_value = record.get("t")
+            if raw_value is None:
+                raise ValueError("timestamp field is required for OHLCV records")
+            if isinstance(raw_value, (int, float)):
+                seconds = float(raw_value)
+                if seconds > 1e12:
+                    seconds /= 1000.0
+                return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
+            if isinstance(raw_value, str):
+                trimmed = raw_value.strip()
+                if trimmed.isdigit():
+                    seconds = float(trimmed)
+                    if seconds > 1e12:
+                        seconds /= 1000.0
+                    return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
+                value = trimmed
+            else:
+                value = raw_value
+        return self._normalize_timestamp(value)
 
     def _normalize_timestamp(self, value: Any) -> str:
         to_pydatetime = getattr(value, "to_pydatetime", None)
@@ -1018,8 +1132,29 @@ class ReconciliationBuilder:
         if isinstance(value, datetime):
             return value.date()
         if isinstance(value, str):
-            return date.fromisoformat(value)
-        raise ValueError(f"{field} must be a date compatible value")
+            try:
+                return date.fromisoformat(value)
+            except ValueError as exc:  # pragma: no cover - defensive
+                raise ValueError(f"{field} must be YYYY-MM-DD text (got {value!r})") from exc
+        raise ValueError(f"{field} must be a date compatible value (got {value!r})")
 
 
 __all__ = ["ReconciliationBuilder", "ReconciliationError"]
+
+
+def _canonical_legacy_daily_enabled() -> bool:
+    value = os.environ.get("QUANTO_CANONICAL_LEGACY_DAILY_SHARDS")
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    return normalized not in {"0", "false", "no"}
+
+
+def _resolve_runtime_root(path: Path, *, layer: str = "raw") -> Path:
+    expanded = path.expanduser()
+    if expanded.name == layer:
+        return expanded
+    candidate = expanded / layer
+    if candidate.exists():
+        return candidate
+    return expanded

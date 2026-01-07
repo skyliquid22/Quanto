@@ -1,0 +1,9 @@
+[project]
+name = "institutional-trade-bot"
+version = "0.1.0"
+description = "Institutional-style end-to-end trade bot (FinRL-based)"
+authors = [{ name = "Your Name" }]
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

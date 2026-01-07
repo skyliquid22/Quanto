@@ -8,25 +8,36 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover
     sys.path.insert(0, str(PROJECT_ROOT))
+CANONICAL_CONFIG_PATH = PROJECT_ROOT / "configs" / "data_sources.yml"
+_UNIVERSE_BOOTSTRAP_LOG_PREFIX = "[universe-bootstrap]"
 
 from infra.normalization.lineage import compute_file_hash
 from infra.paths import get_data_root as default_data_root
-from research.datasets.canonical_equity_loader import load_canonical_equity
+from research.datasets.canonical_equity_loader import build_union_calendar, load_canonical_equity, verify_coverage
 from research.envs.signal_weight_env import SignalWeightEnvConfig, SignalWeightTradingEnv
-from research.features.feature_registry import FeatureSetResult, build_features, strategy_to_feature_frame
+from research.features.feature_eng import build_universe_feature_results
+from research.features.feature_registry import (
+    FeatureSetResult,
+    build_features,
+    build_universe_feature_panel,
+    is_universe_feature_set,
+    normalize_feature_set_name,
+    strategy_to_feature_frame,
+)
 from research.policies.sma_weight_policy import SMAWeightPolicy, SMAWeightPolicyConfig
 from research.runners.rollout import RolloutResult, run_rollout
 from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossover
+from scripts.build_canonical_datasets import build_missing_equity_ohlcv_canonical
 
 
 @dataclass(frozen=True)
@@ -74,9 +85,70 @@ class BootstrapDecision:
     canonical_manifest: ManifestMetadata | None
 
 
+def ensure_yearly_daily_coverage(
+    *,
+    symbols: Sequence[str],
+    start: date,
+    end: date,
+    data_root: Path,
+    auto_build: bool,
+    run_id_seed: str | None = None,
+) -> Dict[str, Any]:
+    """Ensure YEARLY-daily canonical coverage for the requested symbols."""
+
+    coverage = verify_coverage(list(symbols), start.isoformat(), end.isoformat(), data_root=data_root)
+    missing_pairs: List[Tuple[str, int]] = list(coverage["missing_pairs"])
+    if not missing_pairs:
+        return coverage
+    formatted = _format_missing_shards(missing_pairs)
+    print(f"{_UNIVERSE_BOOTSTRAP_LOG_PREFIX} Missing canonical shards: {', '.join(formatted)}")
+    if auto_build:
+        years = sorted({year for _, year in missing_pairs})
+        missing_symbols = sorted({symbol for symbol, _ in missing_pairs})
+        run_id = _derive_universe_canonical_run_id(missing_symbols, years, seed=run_id_seed)
+        print(f"{_UNIVERSE_BOOTSTRAP_LOG_PREFIX} Building canonical shards: {', '.join(formatted)}")
+        build_missing_equity_ohlcv_canonical(
+            symbols=missing_symbols,
+            years=years,
+            config_path=str(CANONICAL_CONFIG_PATH),
+            raw_root=data_root,
+            data_root=data_root,
+            run_id=run_id,
+        )
+        coverage = verify_coverage(list(symbols), start.isoformat(), end.isoformat(), data_root=data_root)
+        missing_pairs = list(coverage["missing_pairs"])
+    if missing_pairs:
+        formatted = _format_missing_shards(missing_pairs)
+        raise SystemExit(
+            "Missing canonical yearly shards: "
+            + ", ".join(formatted)
+            + ". Run live bootstrap or inspect canonical builder logs."
+        )
+    return coverage
+
+
+def _format_missing_shards(pairs: Sequence[Tuple[str, int]]) -> List[str]:
+    return [f"{symbol}:{year}" for symbol, year in pairs]
+
+
+def _derive_universe_canonical_run_id(symbols: Sequence[str], years: Sequence[int], *, seed: str | None = None) -> str:
+    payload = {
+        "symbols": sorted(symbols),
+        "years": sorted(years),
+        "seed": seed or "",
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    return f"universe_canonical_{digest[:10]}"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run deterministic SMA rollout in a FinRL-style environment.")
     parser.add_argument("--symbol", default="AAPL", help="Single equity symbol to backtest.")
+    parser.add_argument(
+        "--symbols",
+        action="append",
+        help="Universe mode symbols (comma-separated list when repeated).",
+    )
     parser.add_argument("--start-date", required=True, help="Inclusive start date (YYYY-MM-DD).")
     parser.add_argument("--end-date", required=True, help="Inclusive end date (YYYY-MM-DD).")
     parser.add_argument("--interval", default="daily", help="Bar interval to use (daily only in v1).")
@@ -87,7 +159,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sigmoid-scale", type=float, default=5.0, help="Scale factor for sigmoid mode.")
     parser.add_argument(
         "--feature-set",
-        choices=["sma_v1", "options_v1", "sma_plus_options_v1"],
+        choices=["sma_v1", "sma_universe_v1", "options_v1", "sma_plus_options_v1", "equity_xsec_v1", "sma_plus_xsec_v1"],
         default="sma_v1",
         help="Feature set used for environment observations.",
     )
@@ -116,6 +188,24 @@ def parse_args() -> argparse.Namespace:
         help="Always rebuild canonicals before the rollout.",
     )
     return parser.parse_args()
+
+
+def _resolve_symbol_list(symbol: str, symbols_arg: Sequence[str] | None) -> List[str]:
+    if symbols_arg:
+        tokens: List[str] = []
+        for entry in symbols_arg:
+            for chunk in str(entry).split(","):
+                clean = chunk.strip().upper()
+                if clean:
+                    tokens.append(clean)
+        ordered = sorted(dict.fromkeys(tokens))
+        if not ordered:
+            raise SystemExit("At least one valid symbol must be provided for --symbols")
+        return ordered
+    clean = str(symbol).upper().strip()
+    if not clean:
+        raise SystemExit("symbol must be provided")
+    return [clean]
 
 
 def needs_canonical_refresh(
@@ -197,13 +287,10 @@ def _canonical_files_exist(data_root: Path, domain: str, symbols: Sequence[str],
         return base.exists()
     for symbol in symbols:
         base = data_root / "canonical" / domain / symbol / "daily"
-        has_data = False
-        for day in _iter_days(start, end):
-            path = base / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}.parquet"
-            if path.exists():
-                has_data = True
-                break
-        if not has_data:
+        missing_years = [
+            year for year in range(start.year, end.year + 1) if not (base / f"{year}.parquet").exists()
+        ]
+        if missing_years:
             return False
     return True
 
@@ -446,9 +533,7 @@ def _write_temporary_config(payload: Mapping[str, Any]) -> Path:
 
 def main() -> int:
     args = parse_args()
-    symbol = args.symbol.upper().strip()
-    if not symbol:
-        raise SystemExit("symbol must be provided")
+    symbols = _resolve_symbol_list(args.symbol, args.symbols)
     start = date.fromisoformat(args.start_date)
     end = date.fromisoformat(args.end_date)
     if end < start:
@@ -462,9 +547,19 @@ def main() -> int:
     if interval != "daily":
         raise SystemExit("Only the daily interval is supported for the SMA FinRL rollout in v1.")
     data_root = resolve_data_root(args.data_root)
+    universe_mode = bool(args.symbols)
+    if universe_mode:
+        ensure_yearly_daily_coverage(
+            symbols=symbols,
+            start=start,
+            end=end,
+            data_root=data_root,
+            auto_build=True,
+            run_id_seed=args.run_id,
+        )
     os.environ["QUANTO_DATA_ROOT"] = str(data_root)
     bootstrap = maybe_run_live_bootstrap(
-        symbols=[symbol],
+        symbols=symbols,
         start=start,
         end=end,
         data_root=data_root,
@@ -475,61 +570,132 @@ def main() -> int:
         force_canonical=args.force_canonical_build,
         run_id_seed=args.run_id,
     )
+    ensure_yearly_daily_coverage(
+        symbols=symbols,
+        start=start,
+        end=end,
+        data_root=data_root,
+        auto_build=False,
+        run_id_seed=args.run_id,
+    )
 
     canonical_manifest = bootstrap.canonical_manifest or _locate_canonical_manifest(
         data_root, args.canonical_domain, start, end
     )
-    if not canonical_manifest or not _canonical_files_exist(data_root, args.canonical_domain, [symbol], start, end):
+    if not canonical_manifest:
         raise SystemExit(
-            f"No canonical data found for {symbol}. Live bootstrap failed or data is missing; inspect vendor credentials "
-            "and canonical build logs."
+            "No canonical manifest found for the requested symbols. Live bootstrap failed or data is missing; inspect "
+            "vendor credentials and canonical build logs."
         )
     bootstrap.canonical_manifest = canonical_manifest
 
-    slices, canonical_hashes = load_canonical_equity([symbol], start, end, data_root=data_root, interval=interval)
-    if not slices.get(symbol) or not slices[symbol].rows:
-        raise SystemExit(f"No canonical data found for symbol {symbol}")
+    slices, canonical_hashes = load_canonical_equity(symbols, start, end, data_root=data_root, interval=interval)
+    for symbol in symbols:
+        if not slices.get(symbol) or not slices[symbol].rows:
+            raise SystemExit(f"No canonical data found for symbol {symbol}")
 
     sma_config = SMAStrategyConfig(fast_window=args.fast, slow_window=args.slow)
-    strategy = run_sma_crossover(symbol, slices[symbol].timestamps, slices[symbol].closes, sma_config)
-    strategy_frame = strategy_to_feature_frame(strategy)
-    if len(strategy_frame) < 2:
-        raise SystemExit("Not enough SMA-aligned rows to build features")
-    feature_result = build_features(
-        args.feature_set,
-        strategy_frame,
-        underlying_symbol=symbol,
-        start_date=start,
-        end_date=end,
-        data_root=data_root,
-    )
-    rows = feature_result.frame.to_dict("records")
+    per_symbol_features: Dict[str, FeatureSetResult] = {}
+    feature_hashes: Dict[str, str] = {}
+    feature_set_name: str | None = None
+    multi_symbol = len(symbols) > 1
+    normalized_feature_set = normalize_feature_set_name(args.feature_set)
+    if not multi_symbol and is_universe_feature_set(normalized_feature_set):
+        raise SystemExit(f"Feature set '{args.feature_set}' requires at least two symbols (--symbols)")
+    if multi_symbol and is_universe_feature_set(normalized_feature_set):
+        per_symbol_features = build_universe_feature_results(
+            normalized_feature_set,
+            slices,
+            symbol_order=symbols,
+            start_date=start,
+            end_date=end,
+            sma_config=sma_config,
+            data_root=data_root,
+        )
+    else:
+        for symbol in symbols:
+            strategy = run_sma_crossover(symbol, slices[symbol].timestamps, slices[symbol].closes, sma_config)
+            strategy_frame = strategy_to_feature_frame(strategy)
+            if len(strategy_frame) < 2:
+                raise SystemExit(f"Not enough SMA-aligned rows to build features for {symbol}")
+            feature_result = build_features(
+                args.feature_set,
+                strategy_frame,
+                underlying_symbol=symbol,
+                start_date=start,
+                end_date=end,
+                data_root=data_root,
+            )
+            per_symbol_features[symbol] = feature_result
+    if not per_symbol_features:
+        raise SystemExit("Failed to build observation features")
+    feature_set_name = next(iter(per_symbol_features.values())).feature_set
+    for symbol, feature_result in per_symbol_features.items():
+        if feature_result.feature_set != feature_set_name:
+            raise SystemExit("Feature set mismatch across symbols; ensure a consistent registry entry")
+        if multi_symbol:
+            for key, value in feature_result.inputs_used.items():
+                feature_hashes[f"{symbol}:{key}"] = value
+        else:
+            feature_hashes.update(feature_result.inputs_used)
+
+    if len(symbols) == 1:
+        primary = symbols[0]
+        rows = per_symbol_features[primary].frame.to_dict("records")
+        base_observation_columns = per_symbol_features[primary].observation_columns
+    else:
+        calendar = build_union_calendar(slices, start_date=start, end_date=end)
+        panel = build_universe_feature_panel(
+            per_symbol_features,
+            symbol_order=symbols,
+            calendar=calendar,
+            forward_fill_limit=3,
+        )
+        rows = panel.rows
+        base_observation_columns = panel.observation_columns
+
     if len(rows) < 2:
-        raise SystemExit("Not enough feature rows to run the rollout")
+        raise SystemExit("Not enough aligned feature rows to run the rollout")
 
     env_config = SignalWeightEnvConfig(transaction_cost_bp=args.transaction_cost_bp)
-    env = SignalWeightTradingEnv(rows, env_config, observation_columns=feature_result.observation_columns)
+    env = SignalWeightTradingEnv(rows, env_config, observation_columns=base_observation_columns)
+    observation_headers = env.observation_columns
     policy = SMAWeightPolicy(SMAWeightPolicyConfig(mode=args.policy_mode, sigmoid_scale=args.sigmoid_scale))
     combined_hashes = dict(canonical_hashes)
-    combined_hashes.update(feature_result.inputs_used)
-    result = run_rollout(env, policy, inputs_used=combined_hashes)
+    combined_hashes.update(feature_hashes)
+    rollout_metadata = {
+        "feature_set": feature_set_name or args.feature_set,
+        "interval": interval,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "transaction_cost_bp": env_config.transaction_cost_bp,
+        "policy": {
+            "type": "sma_weight",
+            "mode": policy.mode,
+            "sigmoid_scale": policy.config.sigmoid_scale,
+        },
+        "symbols": list(symbols),
+    }
+    result = run_rollout(env, policy, inputs_used=combined_hashes, metadata=rollout_metadata)
 
     run_id = args.run_id or derive_run_id(
-        symbol,
+        symbols,
         start,
         end,
         sma_config,
         env_config,
         policy,
         result.inputs_used,
-        feature_result,
+        feature_set_name or args.feature_set,
+        base_observation_columns,
     )
 
     report_path = data_root / "monitoring" / "reports" / f"sma_finrl_rollout_{run_id}.json"
     plot_path = data_root / "monitoring" / "plots" / f"sma_finrl_rollout_{run_id}.png"
     plot_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    _render_account_weight_plot(plot_path, result.account_values, result.weights)
+    weights_for_plot = _weights_for_plot(result.weights, result.symbols)
+    _render_account_weight_plot(plot_path, result.account_values, weights_for_plot)
 
     hashes = {
         "canonical_files": dict(sorted(result.inputs_used.items())),
@@ -538,7 +704,7 @@ def main() -> int:
     }
     payload = build_report_payload(
         run_id=run_id,
-        symbol=symbol,
+        symbols=result.symbols,
         start=start,
         end=end,
         sma_config=sma_config,
@@ -551,7 +717,9 @@ def main() -> int:
         plot_path=plot_path,
         bootstrap=bootstrap,
         interval=interval,
-        feature_result=feature_result,
+        feature_set=feature_set_name or args.feature_set,
+        base_observation_columns=base_observation_columns,
+        observation_headers=observation_headers,
     )
     _write_report(report_path, payload)
     print(
@@ -574,28 +742,45 @@ def resolve_data_root(arg_root: str | None) -> Path:
 
 
 def derive_run_id(
-    symbol: str,
+    symbols: Sequence[str],
     start: date,
     end: date,
     sma_config: SMAStrategyConfig,
     env_config: SignalWeightEnvConfig,
     policy: SMAWeightPolicy,
     canonical_hashes: Dict[str, str],
-    feature_result: FeatureSetResult,
+    feature_set: str,
+    observation_columns: Sequence[str],
 ) -> str:
-    canonical = {
-        "symbol": symbol,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
-        "fast_window": sma_config.fast_window,
-        "slow_window": sma_config.slow_window,
-        "transaction_cost_bp": env_config.transaction_cost_bp,
-        "policy_mode": policy.mode,
-        "sigmoid_scale": policy.config.sigmoid_scale,
-        "canonical_hashes": {key: canonical_hashes[key] for key in sorted(canonical_hashes)},
-        "feature_set": feature_result.feature_set,
-        "observation_columns": list(feature_result.observation_columns),
-    }
+    ordered_symbols = list(symbols)
+    if len(ordered_symbols) == 1:
+        canonical = {
+            "symbol": ordered_symbols[0],
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "fast_window": sma_config.fast_window,
+            "slow_window": sma_config.slow_window,
+            "transaction_cost_bp": env_config.transaction_cost_bp,
+            "policy_mode": policy.mode,
+            "sigmoid_scale": policy.config.sigmoid_scale,
+            "canonical_hashes": {key: canonical_hashes[key] for key in sorted(canonical_hashes)},
+            "feature_set": feature_set,
+            "observation_columns": list(observation_columns),
+        }
+    else:
+        canonical = {
+            "symbols": ordered_symbols,
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "fast_window": sma_config.fast_window,
+            "slow_window": sma_config.slow_window,
+            "transaction_cost_bp": env_config.transaction_cost_bp,
+            "policy_mode": policy.mode,
+            "sigmoid_scale": policy.config.sigmoid_scale,
+            "canonical_hashes": {key: canonical_hashes[key] for key in sorted(canonical_hashes)},
+            "feature_set": feature_set,
+            "observation_columns": list(observation_columns),
+        }
     digest = hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     ).hexdigest()
@@ -605,7 +790,7 @@ def derive_run_id(
 def build_report_payload(
     *,
     run_id: str,
-    symbol: str,
+    symbols: Sequence[str],
     start: date,
     end: date,
     sma_config: SMAStrategyConfig,
@@ -618,10 +803,15 @@ def build_report_payload(
     plot_path: Path,
     bootstrap: BootstrapMetadata,
     interval: str,
-    feature_result: FeatureSetResult,
+    feature_set: str,
+    base_observation_columns: Sequence[str],
+    observation_headers: Sequence[str],
 ) -> Dict[str, Any]:
+    symbol_list = list(symbols)
+    primary_symbol = symbol_list[0] if symbol_list else ""
     parameters = {
-        "symbol": symbol,
+        "symbol": primary_symbol,
+        "symbols": symbol_list,
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
         "interval": interval,
@@ -631,14 +821,17 @@ def build_report_payload(
         "initial_cash": env_config.initial_cash,
         "policy_mode": policy.mode,
         "sigmoid_scale": policy.config.sigmoid_scale,
-        "feature_set": feature_result.feature_set,
-        "observation_columns": list(feature_result.observation_columns),
+        "feature_set": feature_set,
+        "observation_columns": list(base_observation_columns),
+        "panel_observation_columns": list(observation_headers),
     }
+    weights_series = _weights_series_for_report(result)
     series = {
         "timestamps": result.timestamps,
         "account_value": result.account_values,
-        "weights": result.weights,
+        "weights": weights_series,
         "log_returns": result.log_returns,
+        "transaction_costs": result.transaction_costs,
     }
     artifacts = {
         "report": _rel_path(report_path, data_root),
@@ -647,7 +840,7 @@ def build_report_payload(
     return {
         "run_id": run_id,
         "interval": interval,
-        "symbol": symbol,
+        "symbol": primary_symbol,
         "date_range": {"start": start.isoformat(), "end": end.isoformat()},
         "parameters": parameters,
         "metrics": result.metrics,
@@ -657,7 +850,30 @@ def build_report_payload(
         "artifacts": artifacts,
         "hashes": hashes,
         "bootstrap": bootstrap.as_payload(data_root),
+        "rollout_metadata": result.metadata,
     }
+
+
+def _weights_series_for_report(result: RolloutResult) -> object:
+    if not result.weights:
+        return [] if len(result.symbols) <= 1 else {symbol: [] for symbol in result.symbols}
+    if len(result.symbols) <= 1:
+        symbol = result.symbols[0] if result.symbols else "asset"
+        return [entry.get(symbol, 0.0) for entry in result.weights]
+    return {
+        symbol: [entry.get(symbol, 0.0) for entry in result.weights] for symbol in result.symbols
+    }
+
+
+def _weights_for_plot(weight_entries: Sequence[Mapping[str, float]], symbols: Sequence[str]) -> List[float]:
+    if not weight_entries:
+        return []
+    if not symbols:
+        return [sum(entry.values()) for entry in weight_entries]
+    totals: List[float] = []
+    for entry in weight_entries:
+        totals.append(sum(entry.get(symbol, 0.0) for symbol in symbols))
+    return totals
 
 
 def _write_report(path: Path, payload: Dict[str, Any]) -> None:
@@ -764,11 +980,7 @@ def _write_png(path: Path, pixels: bytearray, width: int, height: int) -> None:
         handle.write(chunk(b"IEND", b""))
 
 
-def _iter_days(start: date, end: date) -> Iterable[date]:
-    current = start
-    while current <= end:
-        yield current
-        current += timedelta(days=1)
+__all__ = ["parse_args", "main", "ensure_yearly_daily_coverage", "resolve_data_root"]
 
 
 if __name__ == "__main__":  # pragma: no cover

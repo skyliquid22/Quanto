@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timezone
+import json
+import os
 from pathlib import Path
 from typing import Iterable, Mapping, MutableMapping, Sequence
+
+try:  # pragma: no cover - optional dependency
+    import pyarrow.parquet as pq  # type: ignore
+except Exception:  # pragma: no cover - keep optional dependency soft
+    pq = None
 
 from infra.paths import raw_root
 from infra.storage.parquet import write_parquet_atomic
@@ -14,9 +21,21 @@ from infra.storage.parquet import write_parquet_atomic
 class RawEquityOHLCVWriter:
     """Writes validated equity OHLCV bars into canonical raw storage."""
 
-    def __init__(self, base_path: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        base_path: Path | str | None = None,
+        *,
+        shard_yearly_daily: bool | None = None,
+    ) -> None:
         resolved = base_path if base_path is not None else raw_root()
         self.base_path = Path(resolved)
+        env_flag = _env_shard_flag()
+        if env_flag is not None:
+            self.shard_yearly_daily = env_flag
+        elif shard_yearly_daily is not None:
+            self.shard_yearly_daily = shard_yearly_daily
+        else:
+            self.shard_yearly_daily = False
 
     def write_records(
         self,
@@ -24,6 +43,9 @@ class RawEquityOHLCVWriter:
         records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
     ) -> MutableMapping[str, object]:
         """Persist records and return manifest metadata describing the writes."""
+
+        if self.shard_yearly_daily:
+            return self._write_sharded_records(vendor, records)
 
         grouped: MutableMapping[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
         for index, record in enumerate(records):
@@ -40,6 +62,29 @@ class RawEquityOHLCVWriter:
             result = write_parquet_atomic(payload, path)
             file_details.append({"path": str(path), "hash": result["file_hash"], "records": len(sorted_items)})
 
+        return {"files": file_details, "total_files": len(file_details)}
+
+    def _write_sharded_records(
+        self,
+        vendor: str,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        shards: MutableMapping[Path, list[dict[str, object]]] = defaultdict(list)
+        for index, record in enumerate(records):
+            normalized = dict(record)
+            timestamp = _coerce_datetime(normalized["timestamp"], index)
+            normalized["timestamp"] = timestamp
+            symbol = str(normalized["symbol"])
+            interval = _normalize_interval(normalized.get("interval"))
+            base_dir = self.base_path / vendor / "equity_ohlcv" / symbol / interval
+            shard_path = _shard_path(base_dir, timestamp, interval)
+            shards[shard_path].append(normalized)
+
+        file_details = []
+        for path, items in shards.items():
+            merged = _merge_with_existing(path, items)
+            result = write_parquet_atomic(merged, path)
+            file_details.append({"path": str(path), "hash": result["file_hash"], "records": len(merged)})
         return {"files": file_details, "total_files": len(file_details)}
 
     def _resolve_path(self, vendor: str, symbol: str, iso_date: str) -> Path:
@@ -167,6 +212,18 @@ def _coerce_datetime(value: object, index: int | None = None) -> datetime:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError as exc:  # pragma: no cover - defensive
+            position = f" at index {index}" if index is not None else ""
+            raise TypeError(f"timestamp must be datetime{position}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
     position = f" at index {index}" if index is not None else ""
     raise TypeError(f"timestamp must be datetime{position}")
 
@@ -242,6 +299,77 @@ class RawFundamentalsWriter:
     def _resolve_path(self, vendor: str, symbol: str, iso_date: str) -> Path:
         year, month, day = iso_date.split("-")
         return self.base_path / vendor / "fundamentals" / symbol / year / month / f"{day}.parquet"
+
+
+def _merge_with_existing(path: Path, new_records: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    combined: list[dict[str, object]] = []
+    if path.exists():
+        combined.extend(_read_existing_records(path))
+    combined.extend(dict(record) for record in new_records)
+    return _dedup_records(combined)
+
+
+def _read_existing_records(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    if pq is not None:
+        try:
+            table = pq.read_table(path)
+            return table.to_pylist()
+        except Exception:  # pragma: no cover - fallback when parquet reader unavailable
+            pass
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:  # pragma: no cover - defensive
+        raise RuntimeError(
+            f"Cannot merge existing parquet shard at {path} without pyarrow installed"
+        ) from exc
+    return json.loads(text) if text.strip() else []
+
+
+def _dedup_records(records: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    dedup: dict[tuple[object, str, str, object], dict[str, object]] = {}
+    for record in records:
+        normalized = dict(record)
+        symbol = str(normalized.get("symbol"))
+        timestamp = _coerce_datetime(normalized["timestamp"])
+        raw_interval = normalized.get("interval")
+        interval = _normalize_interval(raw_interval) if raw_interval is not None else None
+        normalized["symbol"] = symbol
+        normalized["timestamp"] = timestamp
+        if raw_interval is not None:
+            normalized["interval"] = interval
+        source_vendor = normalized.get("source_vendor")
+        key = (symbol, timestamp.isoformat(), interval, source_vendor)
+        dedup[key] = normalized
+    ordered = sorted(dedup.values(), key=lambda rec: rec["timestamp"])
+    return ordered
+
+
+def _normalize_interval(value: object | None) -> str:
+    if not value:
+        return "daily"
+    return str(value).strip().lower()
+
+
+def _shard_mode(interval: str) -> str:
+    return "year" if interval == "daily" else "month"
+
+
+def _shard_path(base_dir: Path, timestamp: datetime, interval: str) -> Path:
+    if _shard_mode(interval) == "year":
+        return base_dir / f"{timestamp.year}.parquet"
+    return base_dir / f"{timestamp.year:04d}" / f"{timestamp.month:02d}.parquet"
+
+
+def _env_shard_flag() -> bool | None:
+    value = os.environ.get("QUANTO_RAW_YEARLY_DAILY")
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"", "0", "false", "no"}:
+        return False
+    return True
 
 
 __all__ = ["RawEquityOHLCVWriter", "RawFundamentalsWriter", "RawOptionsWriter"]

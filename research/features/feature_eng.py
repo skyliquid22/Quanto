@@ -1,5 +1,139 @@
-"""
-Feature engineering module.
+"""Feature engineering helpers for canonical equity datasets."""
 
-Compute features from raw data and write to data/features/.
-"""
+from __future__ import annotations
+
+from datetime import date
+from pathlib import Path
+from typing import Dict, Mapping, Sequence
+
+from research.datasets.canonical_equity_loader import CanonicalEquitySlice
+from research.features.equity_xsec_features_v1 import build_equity_xsec_feature_frames
+from research.features.feature_registry import (
+    EQUITY_XSEC_OBSERVATION_COLUMNS,
+    FeatureSetResult,
+    SMA_PLUS_XSEC_OBSERVATION_COLUMNS,
+    build_features,
+    normalize_feature_set_name,
+    strategy_to_feature_frame,
+)
+from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossover
+
+
+def build_sma_feature_result(
+    slice_data: CanonicalEquitySlice,
+    *,
+    fast_window: int,
+    slow_window: int,
+    feature_set: str = "sma_v1",
+    start_date: date | None = None,
+    end_date: date | None = None,
+    data_root: Path | None = None,
+) -> FeatureSetResult:
+    """Generate SMA-aligned feature frames for a canonical slice."""
+
+    if fast_window <= 0 or slow_window <= 0:
+        raise ValueError("SMA windows must be positive")
+    if fast_window >= slow_window:
+        raise ValueError("fast_window must be strictly less than slow_window")
+    if slice_data.frame.empty:
+        raise ValueError("slice_data must contain at least two rows to build SMA features")
+
+    timestamps = slice_data.timestamps
+    closes = slice_data.closes
+    if len(timestamps) != len(closes) or len(timestamps) < 2:
+        raise ValueError("slice_data must provide at least two aligned timestamps and close prices")
+
+    config = SMAStrategyConfig(fast_window=fast_window, slow_window=slow_window)
+    strategy = run_sma_crossover(slice_data.symbol, timestamps, closes, config)
+    frame = strategy_to_feature_frame(strategy)
+    if len(frame) < 2:
+        raise ValueError("Not enough SMA-aligned rows to build features")
+
+    start = start_date or timestamps[0].date()
+    end = end_date or timestamps[-1].date()
+    return build_features(
+        feature_set,
+        frame,
+        underlying_symbol=slice_data.symbol,
+        start_date=start,
+        end_date=end,
+        data_root=data_root,
+    )
+
+
+def build_universe_feature_results(
+    feature_set: str,
+    slices: Mapping[str, CanonicalEquitySlice],
+    *,
+    symbol_order: Sequence[str] | None = None,
+    start_date: date,
+    end_date: date,
+    sma_config: SMAStrategyConfig | None = None,
+    data_root: Path | None = None,
+) -> Dict[str, FeatureSetResult]:
+    """Build multi-symbol feature sets that require cross-sectional context."""
+
+    normalized = normalize_feature_set_name(feature_set)
+    order = tuple(dict.fromkeys(symbol_order or sorted(slices.keys())))
+    if len(order) < 2:
+        raise ValueError("Universe feature sets require at least two symbols")
+    if normalized not in {"equity_xsec_v1", "sma_plus_xsec_v1"}:
+        raise ValueError(f"Unsupported universe feature set '{feature_set}'")
+
+    frames = build_equity_xsec_feature_frames(
+        slices,
+        start_date=start_date,
+        end_date=end_date,
+        symbol_order=order,
+    )
+    results: Dict[str, FeatureSetResult] = {}
+
+    if normalized == "equity_xsec_v1":
+        for symbol in order:
+            frame = frames.get(symbol)
+            if frame is None or frame.empty:
+                raise ValueError(f"No cross-sectional rows available for {symbol}")
+            results[symbol] = FeatureSetResult(
+                frame=frame,
+                observation_columns=EQUITY_XSEC_OBSERVATION_COLUMNS,
+                feature_set="equity_xsec_v1",
+                inputs_used={},
+            )
+        return results
+
+    if sma_config is None:
+        raise ValueError("sma_config is required for sma_plus_xsec_v1 features")
+    for symbol in order:
+        slice_data = slices.get(symbol)
+        if slice_data is None:
+            raise ValueError(f"Missing canonical slice for symbol {symbol}")
+        base_result = build_sma_feature_result(
+            slice_data,
+            fast_window=sma_config.fast_window,
+            slow_window=sma_config.slow_window,
+            feature_set="sma_universe_v1",
+            start_date=start_date,
+            end_date=end_date,
+            data_root=data_root,
+        )
+        cross_frame = frames[symbol].drop(columns=["close"])
+        merged = base_result.frame.merge(cross_frame, on="timestamp", how="inner")
+        merged.sort_values("timestamp", inplace=True, kind="mergesort")
+        merged.reset_index(drop=True, inplace=True)
+        merged = merged.fillna(0.0)
+        missing = [column for column in SMA_PLUS_XSEC_OBSERVATION_COLUMNS if column not in merged.columns]
+        for column in missing:
+            merged[column] = 0.0
+        merged = merged[["timestamp", *SMA_PLUS_XSEC_OBSERVATION_COLUMNS]]
+        if len(merged) < 2:
+            raise ValueError(f"Not enough overlapping rows to build sma_plus_xsec_v1 for {symbol}")
+        results[symbol] = FeatureSetResult(
+            frame=merged,
+            observation_columns=SMA_PLUS_XSEC_OBSERVATION_COLUMNS,
+            feature_set="sma_plus_xsec_v1",
+            inputs_used=dict(base_result.inputs_used),
+        )
+    return results
+
+
+__all__ = ["build_sma_feature_result", "build_universe_feature_results"]

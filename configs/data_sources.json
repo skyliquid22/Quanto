@@ -1,0 +1,40 @@
+{
+  "raw_shard_yearly_daily": false,
+  "vendors": [
+    {"name": "polygon", "domains": ["equity_ohlcv"]},
+    {"name": "iex", "domains": ["equity_ohlcv"]},
+    {"name": "occ", "domains": ["option_contract_reference", "option_contract_ohlcv", "option_open_interest"]},
+    {"name": "opra", "domains": ["option_contract_reference", "option_contract_ohlcv", "option_open_interest"]},
+    {"name": "factset", "domains": ["fundamentals"]},
+    {"name": "sec", "domains": ["fundamentals"]}
+  ],
+  "reconciliation": {
+    "allowed_validation_statuses": ["passed"],
+    "domains": {
+      "equity_ohlcv": {
+        "vendor_priority": ["polygon", "iex"],
+        "fallback_mode": "per_symbol"
+      },
+      "option_contract_reference": {
+        "vendor_priority": ["occ", "opra"],
+        "enforce_single_vendor_per_underlying": true,
+        "allow_fallback": true
+      },
+      "option_contract_ohlcv": {
+        "vendor_priority": ["occ", "opra"],
+        "enforce_single_vendor_per_underlying": true,
+        "allow_fallback": true
+      },
+      "option_open_interest": {
+        "vendor_priority": ["occ", "opra"],
+        "enforce_single_vendor_per_underlying": true,
+        "allow_fallback": true
+      },
+      "fundamentals": {
+        "vendor_priority": ["factset", "sec"],
+        "fundamentals_of_record": "factset",
+        "allow_fallback": true
+      }
+    }
+  }
+}

@@ -61,8 +61,7 @@ def build_request(config: Mapping[str, Any]) -> EquityIngestionRequest:
     )
 
 
-def main() -> int:
-    args = parse_args()
+async def _amain(args: argparse.Namespace) -> int:
     config_path = Path(args.config)
     config = load_config(config_path)
     request = build_request(config)
@@ -96,20 +95,34 @@ def main() -> int:
     )
     pipeline = EquityIngestionPipeline(adapter=adapter, router=router, raw_writer=raw_writer, manifest_dir=manifest_dir)
 
+    loop = asyncio.get_running_loop()
+    manifest: Mapping[str, Any] | None = None
+    exit_code: int
     try:
-        manifest = pipeline.run(request, run_id=args.run_id, forced_mode=forced_mode)
+        manifest = await loop.run_in_executor(None, lambda: pipeline.run(request, run_id=args.run_id, forced_mode=forced_mode))
     except ValidationError as exc:
         print(f"Validation failed: {exc}", file=sys.stderr)
-        return 1
+        exit_code = 1
     except Exception as exc:  # pragma: no cover - surface unexpected errors
         print(f"Pipeline failed: {exc}", file=sys.stderr)
-        return 1
+        exit_code = 1
+    else:
+        print(json.dumps(manifest, indent=2, sort_keys=True))
+        exit_code = 0 if manifest["status"] == "succeeded" else 1
     finally:
         if rest_client:
-            asyncio.run(rest_client.aclose())
+            try:
+                await rest_client.aclose()
+            except RuntimeError as exc:
+                if "Event loop is closed" not in str(exc):
+                    raise
 
-    print(json.dumps(manifest, indent=2, sort_keys=True))
-    return 0 if manifest["status"] == "succeeded" else 1
+    return exit_code
+
+
+def main() -> int:
+    args = parse_args()
+    return asyncio.run(_amain(args))
 
 
 if __name__ == "__main__":

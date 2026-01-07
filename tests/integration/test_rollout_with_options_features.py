@@ -106,6 +106,7 @@ def test_rollout_determinism_with_options_features(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(rollout, "maybe_run_live_bootstrap", lambda **kwargs: rollout.BootstrapMetadata(mode="none"))
     monkeypatch.setattr(rollout, "_canonical_files_exist", lambda *args, **kwargs: True)
     monkeypatch.setattr(rollout, "_locate_canonical_manifest", lambda *args, **kwargs: manifest)
+    monkeypatch.setattr(rollout, "ensure_yearly_daily_coverage", lambda **kwargs: {"missing_pairs": []})
     monkeypatch.setattr("research.features.feature_registry.load_canonical_options", fake_load_options)
 
     def run_once(extra_args):

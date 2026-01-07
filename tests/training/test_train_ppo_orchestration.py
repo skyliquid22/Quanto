@@ -54,7 +54,7 @@ def _patch_common_dependencies(monkeypatch: pytest.MonkeyPatch, tmp_path, *, man
             timestamps=[datetime(2023, 1, 2, tzinfo=UTC), datetime(2023, 1, 3, tzinfo=UTC)],
             closes=[100.0, 101.0],
         )
-        return {symbols[0]: slice_data}, {"canonical/equity_ohlcv/AAPL/daily/2023-01-02.parquet": "sha256:deadbeef"}
+        return {symbols[0]: slice_data}, {"canonical/equity_ohlcv/AAPL/daily/2023.parquet": "sha256:deadbeef"}
 
     sample_rows = [
         {
@@ -90,7 +90,7 @@ def _patch_common_dependencies(monkeypatch: pytest.MonkeyPatch, tmp_path, *, man
         metrics={"total_return": 0.05},
         timestamps=["t0", "t1"],
         account_values=[10000.0, 10500.0],
-        weights=[0.0, 0.5],
+        weights=[{"AAPL": 0.0}, {"AAPL": 0.5}],
         log_returns=[0.01],
         steps=[
             {
@@ -103,6 +103,7 @@ def _patch_common_dependencies(monkeypatch: pytest.MonkeyPatch, tmp_path, *, man
                 "reward": 0.01,
             }
         ],
+        symbols=("AAPL",),
     )
 
     monkeypatch.setattr(trainer, "load_canonical_equity", fake_load)
@@ -121,6 +122,7 @@ def _patch_common_dependencies(monkeypatch: pytest.MonkeyPatch, tmp_path, *, man
     monkeypatch.setattr(trainer, "train_ppo", lambda *args, **kwargs: DummyModel())
     monkeypatch.setattr(trainer, "evaluate", lambda model, env: eval_result)
     monkeypatch.setattr(trainer, "_canonical_files_exist", lambda *args, **kwargs: True)
+    monkeypatch.setattr(trainer, "ensure_yearly_daily_coverage", lambda **kwargs: {"missing_pairs": []})
     monkeypatch.setattr(trainer, "_locate_canonical_manifest", lambda *args, **kwargs: manifest)
 
 

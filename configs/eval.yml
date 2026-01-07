@@ -1,0 +1,8 @@
+defaults:
+  feature_set: sma_v1
+  policy: equal_weight
+  fast_window: 20
+  slow_window: 50
+  policy_mode: hard
+  sigmoid_scale: 5.0
+  transaction_cost_bp: 1.0

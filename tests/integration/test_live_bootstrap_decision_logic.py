@@ -10,6 +10,7 @@ from typing import List
 import pytest
 
 from scripts import run_sma_finrl_rollout as rollout
+from research.datasets.canonical_equity_loader import verify_coverage
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -25,8 +26,8 @@ def _extract_run_id(cmd: List[str]) -> str:
 
 
 def _create_canonical_file(root: Path, symbol: str, day: str) -> None:
-    year, month, day_of_month = day.split("-")
-    path = root / "canonical" / "equity_ohlcv" / symbol / "daily" / year / month / f"{day_of_month}.parquet"
+    year = day.split("-")[0]
+    path = root / "canonical" / "equity_ohlcv" / symbol / "daily" / f"{year}.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("[]", encoding="utf-8")
 
@@ -198,6 +199,19 @@ def test_live_bootstrap_rebuilds_when_canonical_stale(tmp_path: Path, monkeypatc
     assert "scripts.build_canonical_datasets" in created[0]
     assert result.refreshed is True
     assert result.raw_manifests and result.raw_manifests[0].run_id == "new_raw"
+
+
+def test_verify_coverage_multi_symbol_multi_year(tmp_path: Path) -> None:
+    start = "2022-01-03"
+    end = "2023-12-29"
+    _create_canonical_file(tmp_path, "AAPL", "2022-01-05")
+    _create_canonical_file(tmp_path, "MSFT", "2023-01-05")
+
+    coverage = verify_coverage(["AAPL", "MSFT"], start, end, data_root=tmp_path)
+    assert coverage["years"] == [2022, 2023]
+    assert coverage["missing_by_symbol"]["AAPL"] == [2023]
+    assert coverage["missing_by_symbol"]["MSFT"] == [2022]
+    assert coverage["missing_pairs"] == [("AAPL", 2023), ("MSFT", 2022)]
 
 
 def test_live_bootstrap_runs_ingest_when_coverage_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

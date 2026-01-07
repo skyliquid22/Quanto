@@ -1,5 +1,6 @@
 # Data sources configuration
 # Declare upstream vendors, auth, and canonical reconciliation behavior.
+raw_shard_yearly_daily: false
 vendors:
   - name: polygon
     domains: [equity_ohlcv]

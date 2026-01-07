@@ -27,7 +27,7 @@ from research.backtests.sma_backtest import (
 )
 from research.datasets.canonical_equity_loader import load_canonical_equity
 from research.strategies.sma_crossover import SMAStrategyConfig, SMAStrategyResult, run_sma_crossover
-from scripts.run_sma_finrl_rollout import BootstrapMetadata, maybe_run_live_bootstrap, resolve_data_root
+from scripts.run_sma_finrl_rollout import BootstrapMetadata, ensure_yearly_daily_coverage, maybe_run_live_bootstrap, resolve_data_root
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,6 +77,14 @@ def main() -> int:
         raise SystemExit("fast window must be smaller than slow window")
 
     data_root = resolve_data_root(args.data_root)
+    ensure_yearly_daily_coverage(
+        symbols=symbols,
+        start=start,
+        end=end,
+        data_root=data_root,
+        auto_build=True,
+        run_id_seed=args.run_id,
+    )
     os.environ["QUANTO_DATA_ROOT"] = str(data_root)
     bootstrap = maybe_run_live_bootstrap(
         symbols=symbols,
@@ -88,6 +96,14 @@ def main() -> int:
         ingest_mode=args.ingest_mode,
         force_ingest=args.force_ingest,
         force_canonical=args.force_canonical_build,
+        run_id_seed=args.run_id,
+    )
+    ensure_yearly_daily_coverage(
+        symbols=symbols,
+        start=start,
+        end=end,
+        data_root=data_root,
+        auto_build=False,
         run_id_seed=args.run_id,
     )
 

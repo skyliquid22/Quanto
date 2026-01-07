@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import sqrt
-from typing import Dict, List, Mapping
+from typing import Dict, List, Mapping, Sequence, Tuple
 
 from research.envs.signal_weight_env import SignalWeightTradingEnv
 from research.policies.sma_weight_policy import SMAWeightPolicy
@@ -16,11 +16,14 @@ ANNUALIZATION_DAYS = 252
 class RolloutResult:
     timestamps: List[str]
     account_values: List[float]
-    weights: List[float]
+    weights: List[Dict[str, float]]
     log_returns: List[float]
-    steps: List[Dict[str, float]]
+    steps: List[Dict[str, object]]
     metrics: Dict[str, float]
     inputs_used: Dict[str, str]
+    symbols: Tuple[str, ...]
+    transaction_costs: List[float]
+    metadata: Dict[str, object]
 
 
 def run_rollout(
@@ -28,37 +31,48 @@ def run_rollout(
     policy: SMAWeightPolicy,
     *,
     inputs_used: Mapping[str, str],
+    metadata: Mapping[str, object] | None = None,
 ) -> RolloutResult:
     env.reset()
+    symbol_order = tuple(getattr(env, "symbols", ())) or _infer_symbol_order(env.current_row)
 
     timeline = [env.current_row["timestamp"].isoformat()]  # type: ignore[index]
     account_values = [float(env.portfolio_value)]
-    weights = [float(env.current_weight)]
+    weights = [_weights_by_symbol(env.current_weights, symbol_order)]
     log_returns: List[float] = []
-    logs: List[Dict[str, float]] = []
+    logs: List[Dict[str, object]] = []
+    transaction_costs: List[float] = []
 
     done = False
     while not done:
         row = env.current_row
-        weight = policy.decide(row)
-        _, reward, done, info = env.step(weight)
+        action_vector = _decide_actions(policy, row, symbol_order)
+        action_payload = action_vector[0] if len(action_vector) == 1 else action_vector
+        _, reward, done, info = env.step(action_payload)
+        realized_weights = _weights_by_symbol(info.get("weight_realized"), symbol_order)
         log_returns.append(float(reward))
+        price_payload = _prices_by_symbol(info.get("price_close"), symbol_order)
+        target_weights = _weights_by_symbol(info.get("weight_target"), symbol_order)
+        weight_entry = _scalar_or_mapping(realized_weights, symbol_order)
         log_entry = {
             "timestamp": info["timestamp"].isoformat(),  # type: ignore[attr-defined]
-            "price_close": float(info["price_close"]),
-            "weight_target": float(info["weight_target"]),
-            "weight_realized": float(info["weight_realized"]),
+            "price_close": _scalar_or_mapping(price_payload, symbol_order),
+            "weight_target": _scalar_or_mapping(target_weights, symbol_order),
+            "weight_realized": weight_entry,
             "portfolio_value": float(info["portfolio_value"]),
             "cost_paid": float(info["cost_paid"]),
             "reward": float(info["reward"]),
         }
         logs.append(log_entry)
+        transaction_costs.append(float(info["cost_paid"]))
         account_values.append(float(info["portfolio_value"]))
-        weights.append(float(info["weight_realized"]))
+        weights.append(realized_weights)
         next_timestamp = env.current_row["timestamp"].isoformat()  # type: ignore[index]
         timeline.append(next_timestamp)
 
-    metrics = _compute_metrics(account_values, log_returns, logs, weights)
+    metrics = _compute_metrics(account_values, log_returns, logs, weights, symbol_order)
+    ordered_inputs = {key: inputs_used[key] for key in sorted(inputs_used)}
+    metadata_payload = _normalize_metadata(metadata)
     return RolloutResult(
         timestamps=timeline,
         account_values=account_values,
@@ -66,15 +80,19 @@ def run_rollout(
         log_returns=log_returns,
         steps=logs,
         metrics=metrics,
-        inputs_used={key: value for key, value in inputs_used.items()},
+        inputs_used=ordered_inputs,
+        symbols=symbol_order,
+        transaction_costs=transaction_costs,
+        metadata=metadata_payload,
     )
 
 
 def _compute_metrics(
     account_values: List[float],
     log_returns: List[float],
-    logs: List[Dict[str, float]],
-    weights: List[float],
+    logs: List[Dict[str, object]],
+    weights: List[Dict[str, float]],
+    symbol_order: Sequence[str],
 ) -> Dict[str, float]:
     if not account_values:
         return {key: 0.0 for key in ("total_return", "annualized_return", "annualized_vol", "sharpe", "max_drawdown")}
@@ -86,8 +104,13 @@ def _compute_metrics(
     annualized_vol = _annualized_volatility(log_returns)
     sharpe = annualized_return / annualized_vol if annualized_vol else 0.0
     max_drawdown = _max_drawdown(account_values)
-    avg_cost = sum(entry["cost_paid"] for entry in logs) / len(logs) if logs else 0.0
-    turnover = sum(abs(weights[idx] - weights[idx - 1]) for idx in range(1, len(weights)))
+    avg_cost = sum(float(entry["cost_paid"]) for entry in logs) / len(logs) if logs else 0.0
+    turnover = 0.0
+    for idx in range(1, len(weights)):
+        prev = weights[idx - 1]
+        curr = weights[idx]
+        for symbol in symbol_order:
+            turnover += abs(curr.get(symbol, 0.0) - prev.get(symbol, 0.0))
     metrics = {
         "total_return": float(total_return),
         "annualized_return": float(annualized_return),
@@ -121,6 +144,63 @@ def _max_drawdown(values: List[float]) -> float:
         drawdown = (value - peak) / peak if peak else 0.0
         worst = min(worst, drawdown)
     return abs(worst)
+
+
+def _decide_actions(policy: SMAWeightPolicy, row: Mapping[str, object], symbol_order: Sequence[str]) -> List[float]:
+    panel = row.get("panel")
+    if isinstance(panel, Mapping) and symbol_order:
+        actions = []
+        for symbol in symbol_order:
+            features = panel.get(symbol)
+            if not isinstance(features, Mapping):
+                raise ValueError("panel entries must be mappings")
+            actions.append(float(policy.decide(features)))
+        return actions
+    return [float(policy.decide(row))]
+
+
+def _weights_by_symbol(payload: object, symbol_order: Sequence[str]) -> Dict[str, float]:
+    if isinstance(payload, Mapping):
+        return {symbol: float(payload.get(symbol, 0.0)) for symbol in symbol_order}
+    if isinstance(payload, (list, tuple)):
+        values = list(payload)
+        if len(values) == 1 and len(symbol_order) > 1:
+            values = values * len(symbol_order)
+        return {symbol: float(values[idx]) for idx, symbol in enumerate(symbol_order)}
+    if len(symbol_order) == 1:
+        return {symbol_order[0]: float(payload or 0.0)}
+    raise ValueError("weight payload missing symbol context")
+
+
+def _prices_by_symbol(payload: object, symbol_order: Sequence[str]) -> Dict[str, float]:
+    if isinstance(payload, Mapping):
+        return {symbol: float(payload.get(symbol, 0.0)) for symbol in symbol_order}
+    if len(symbol_order) == 1:
+        return {symbol_order[0]: float(payload or 0.0)}
+    raise ValueError("price payload missing symbol context")
+
+
+def _scalar_or_mapping(payload: Mapping[str, float], symbol_order: Sequence[str]) -> object:
+    if len(symbol_order) == 1:
+        return float(payload[symbol_order[0]])
+    return dict(payload)
+
+
+def _infer_symbol_order(row: Mapping[str, object]) -> Tuple[str, ...]:
+    panel = row.get("panel")
+    if isinstance(panel, Mapping):
+        return tuple(sorted(panel.keys()))
+    symbol = str(row.get("symbol") or "asset")
+    return (symbol,)
+
+
+def _normalize_metadata(payload: Mapping[str, object] | None) -> Dict[str, object]:
+    if not payload:
+        return {}
+    ordered = {}
+    for key in sorted(payload):
+        ordered[str(key)] = payload[key]
+    return ordered
 
 
 __all__ = ["RolloutResult", "run_rollout"]

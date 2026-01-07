@@ -114,8 +114,8 @@ def test_equity_reconciliation_prefers_primary_with_fallback(tmp_path):
 
     builder.run(domains=["equity_ohlcv"], start_date=date(2023, 1, 2), end_date=date(2023, 1, 2), run_id="testrun")
 
-    aapl_path = canonical_root / "equity_ohlcv" / "AAPL" / "daily" / "2023" / "01" / "02.parquet"
-    msft_path = canonical_root / "equity_ohlcv" / "MSFT" / "daily" / "2023" / "01" / "02.parquet"
+    aapl_path = canonical_root / "equity_ohlcv" / "AAPL" / "daily" / "2023.parquet"
+    msft_path = canonical_root / "equity_ohlcv" / "MSFT" / "daily" / "2023.parquet"
     aapl_records = _load_records(builder, aapl_path)
     msft_records = _load_records(builder, msft_path)
 
@@ -137,3 +137,76 @@ def test_equity_reconciliation_prefers_primary_with_fallback(tmp_path):
     manifest_payload = json.loads(manifest_path.read_text())
     assert manifest_payload["records_written"] == 2
     assert manifest_payload["lineage"]["metadata"]["manifest_paths"]["polygon"].endswith("polygon_run.json")
+    assert not (canonical_root / "equity_ohlcv" / "AAPL" / "daily" / "2023" ).exists()
+
+
+def test_equity_reconciliation_handles_yearly_raw_shards(tmp_path):
+    raw_root = tmp_path / "raw"
+    manifest_root = tmp_path / "manifests"
+    canonical_root = tmp_path / "canonical"
+    metrics_root = tmp_path / "metrics"
+
+    yearly_path = raw_root / "polygon" / "equity_ohlcv" / "MSFT" / "daily" / "2023.parquet"
+    records = []
+    for day in range(3, 6):
+        ts = datetime(2023, 1, day, 16, tzinfo=UTC)
+        records.append(
+            {
+                "symbol": "MSFT",
+                "t": int(ts.timestamp() * 1000),
+                "open": 100 + day,
+                "high": 105 + day,
+                "low": 95 + day,
+                "close": 102 + day,
+                "volume": 1000 + day,
+            }
+        )
+    write_parquet_atomic(records, yearly_path, use_pyarrow=False)
+    file_hash = compute_file_hash(yearly_path)
+    ingest_manifest_dir = raw_root / "polygon" / "equity_ohlcv" / "manifests"
+    ingest_manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_payload = {
+        "domain": "equity_ohlcv",
+        "schema_version": "v1",
+        "source_vendor": "polygon",
+        "run_id": "polygon_yearly",
+        "input_file_hashes": [file_hash],
+        "total_records": len(records),
+        "valid_records": len(records),
+        "invalid_records": 0,
+        "validation_status": "passed",
+        "creation_timestamp": "2023-01-05T00:00:00Z",
+    }
+    (ingest_manifest_dir / "polygon_yearly.json").write_text(json.dumps(manifest_payload, indent=2), encoding="utf-8")
+
+    config = {
+        "reconciliation": {
+            "domains": {
+                "equity_ohlcv": {
+                    "vendor_priority": ["polygon"],
+                }
+            }
+        }
+    }
+    builder = ReconciliationBuilder(
+        config,
+        raw_data_root=raw_root,
+        canonical_root=canonical_root,
+        validation_manifest_root_path=manifest_root,
+        metrics_root=metrics_root,
+        now=datetime(2023, 1, 7, tzinfo=UTC),
+    )
+
+    manifests = builder.run(
+        domains=["equity_ohlcv"],
+        start_date=date(2023, 1, 1),
+        end_date=date(2023, 1, 10),
+        run_id="yearly_run",
+    )
+
+    manifest_payload = manifests["equity_ohlcv"]
+    assert manifest_payload["inputs"], "expected yearly shard to be discovered"
+    assert manifest_payload["records_written"] == len(records)
+
+    canonical_file = canonical_root / "equity_ohlcv" / "MSFT" / "daily" / "2023.parquet"
+    assert canonical_file.exists()

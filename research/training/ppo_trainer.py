@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Sequence
+from typing import Any, Dict, Mapping, Sequence, Tuple
 
 import numpy as np
 
@@ -18,9 +18,10 @@ class EvaluationResult:
     metrics: Dict[str, float]
     timestamps: list[str]
     account_values: list[float]
-    weights: list[float]
+    weights: list[Dict[str, float]]
     log_returns: list[float]
-    steps: list[Dict[str, float]]
+    steps: list[Dict[str, object]]
+    symbols: Tuple[str, ...]
 
 
 def train_ppo(
@@ -53,22 +54,26 @@ def evaluate(model, env) -> EvaluationResult:
         raise ValueError("Evaluation environment must expose an inner_env attribute.")
 
     obs, _ = _reset_env(env)
+    symbol_order = tuple(getattr(inner_env, "symbols", ())) or _infer_symbols(inner_env.current_row)
     timeline = [inner_env.current_row["timestamp"].isoformat()]
     account_values = [float(inner_env.portfolio_value)]
-    weights = [float(inner_env.current_weight)]
+    weights = [_weights_dict(inner_env.current_weights, symbol_order)]
     log_returns: list[float] = []
-    steps: list[Dict[str, float]] = []
+    steps: list[Dict[str, object]] = []
     done = False
 
     while not done:
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, done, info = _step_env(env, action)
         timestamp = info.get("timestamp")
+        realized_weights = _weights_dict(info.get("weight_realized"), symbol_order)
+        target_weights = _weights_dict(info.get("weight_target"), symbol_order)
+        price_payload = _price_dict(info.get("price_close"), symbol_order)
         log_entry = {
             "timestamp": timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp),
-            "price_close": float(info.get("price_close", 0.0)),
-            "weight_target": float(info.get("weight_target", 0.0)),
-            "weight_realized": float(info.get("weight_realized", info.get("weight_target", 0.0))),
+            "price_close": _maybe_scalar(price_payload, symbol_order),
+            "weight_target": _maybe_scalar(target_weights, symbol_order),
+            "weight_realized": _maybe_scalar(realized_weights, symbol_order),
             "portfolio_value": float(info.get("portfolio_value", 0.0)),
             "cost_paid": float(info.get("cost_paid", 0.0)),
             "reward": float(reward),
@@ -76,10 +81,10 @@ def evaluate(model, env) -> EvaluationResult:
         steps.append(log_entry)
         log_returns.append(float(reward))
         account_values.append(float(log_entry["portfolio_value"]))
-        weights.append(float(log_entry["weight_realized"]))
+        weights.append(realized_weights)
         timeline.append(inner_env.current_row["timestamp"].isoformat())
 
-    metrics = _compute_metrics(account_values, log_returns, steps, weights)
+    metrics = _compute_metrics(account_values, log_returns, steps, weights, symbol_order)
     return EvaluationResult(
         metrics=metrics,
         timestamps=timeline,
@@ -87,6 +92,7 @@ def evaluate(model, env) -> EvaluationResult:
         weights=weights,
         log_returns=log_returns,
         steps=steps,
+        symbols=symbol_order,
     )
 
 
@@ -113,7 +119,8 @@ def _compute_metrics(
     account_values: Sequence[float],
     log_returns: Sequence[float],
     logs: Sequence[Mapping[str, float]],
-    weights: Sequence[float],
+    weights: Sequence[Mapping[str, float]],
+    symbol_order: Sequence[str],
 ) -> Dict[str, float]:
     if not account_values:
         return {key: 0.0 for key in ("total_return", "annualized_return", "annualized_vol", "sharpe", "max_drawdown")}
@@ -126,7 +133,12 @@ def _compute_metrics(
     sharpe = annualized_return / annualized_vol if annualized_vol else 0.0
     max_drawdown = _max_drawdown(account_values)
     avg_cost = sum(entry.get("cost_paid", 0.0) for entry in logs) / len(logs) if logs else 0.0
-    turnover = sum(abs(weights[idx] - weights[idx - 1]) for idx in range(1, len(weights)))
+    turnover = 0.0
+    for idx in range(1, len(weights)):
+        prev = weights[idx - 1]
+        curr = weights[idx]
+        for symbol in symbol_order:
+            turnover += abs(curr.get(symbol, 0.0) - prev.get(symbol, 0.0))
     metrics = {
         "total_return": float(total_return),
         "annualized_return": float(annualized_return),
@@ -159,6 +171,41 @@ def _max_drawdown(values: Sequence[float]) -> float:
         drawdown = (value - peak) / peak if peak else 0.0
         worst = min(worst, drawdown)
     return abs(worst)
+
+
+def _weights_dict(payload: object, symbol_order: Sequence[str]) -> Dict[str, float]:
+    if isinstance(payload, Mapping):
+        return {symbol: float(payload.get(symbol, 0.0)) for symbol in symbol_order}
+    if isinstance(payload, (list, tuple)):
+        values = list(payload)
+        if len(values) == 1 and len(symbol_order) > 1:
+            values = values * len(symbol_order)
+        return {symbol: float(values[idx]) for idx, symbol in enumerate(symbol_order)}
+    if len(symbol_order) == 1:
+        return {symbol_order[0]: float(payload or 0.0)}
+    raise ValueError("weight payload missing symbol context")
+
+
+def _price_dict(payload: object, symbol_order: Sequence[str]) -> Dict[str, float]:
+    if isinstance(payload, Mapping):
+        return {symbol: float(payload.get(symbol, 0.0)) for symbol in symbol_order}
+    if len(symbol_order) == 1:
+        return {symbol_order[0]: float(payload or 0.0)}
+    raise ValueError("price payload missing symbol context")
+
+
+def _maybe_scalar(payload: Mapping[str, float], symbol_order: Sequence[str]) -> object:
+    if len(symbol_order) == 1:
+        return float(payload[symbol_order[0]])
+    return dict(payload)
+
+
+def _infer_symbols(row: Mapping[str, object]) -> Tuple[str, ...]:
+    panel = row.get("panel")
+    if isinstance(panel, Mapping):
+        return tuple(sorted(panel.keys()))
+    symbol = str(row.get("symbol") or "asset")
+    return (symbol,)
 
 
 __all__ = ["EvaluationResult", "evaluate", "train_ppo"]

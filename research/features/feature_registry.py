@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Callable, Dict, Mapping, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Sequence, Tuple
 
 from infra.paths import get_data_root
 
@@ -18,12 +18,16 @@ else:  # pragma: no cover
     _PANDAS_ERROR = None
 
 from research.datasets.canonical_options_loader import CanonicalOptionData, load_canonical_options
+from research.features.equity_xsec_features_v1 import EQUITY_XSEC_OBSERVATION_COLUMNS
 from research.features.options_features_v1 import OPTION_FEATURE_COLUMNS, compute_options_features
 from research.strategies.sma_crossover import SMAStrategyResult
 
 SMA_OBSERVATION_COLUMNS = ("close", "sma_fast", "sma_slow", "sma_diff", "sma_signal")
 OPTIONS_OBSERVATION_COLUMNS = ("close",) + OPTION_FEATURE_COLUMNS
 SMA_PLUS_OPTIONS_COLUMNS = SMA_OBSERVATION_COLUMNS + tuple(name for name in OPTION_FEATURE_COLUMNS)
+SMA_PLUS_XSEC_OBSERVATION_COLUMNS = SMA_OBSERVATION_COLUMNS + tuple(
+    column for column in EQUITY_XSEC_OBSERVATION_COLUMNS if column != "close"
+)
 
 
 @dataclass(frozen=True)
@@ -37,11 +41,26 @@ class FeatureSetResult:
 
 
 @dataclass(frozen=True)
+class UniverseFeaturePanel:
+    """Aligned multi-symbol observations for universe environments."""
+
+    rows: List[Dict[str, object]]
+    symbol_order: Tuple[str, ...]
+    observation_columns: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _FeatureSetSpec:
     name: str
     observation_columns: Tuple[str, ...]
     requires_options: bool
     builder: Callable[["pd.DataFrame", CanonicalOptionData | None], "pd.DataFrame"]
+
+
+_UNIVERSE_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
+    "equity_xsec_v1": EQUITY_XSEC_OBSERVATION_COLUMNS,
+    "sma_plus_xsec_v1": SMA_PLUS_XSEC_OBSERVATION_COLUMNS,
+}
 
 
 def strategy_to_feature_frame(strategy: SMAStrategyResult) -> "pd.DataFrame":
@@ -85,7 +104,9 @@ def build_features(
     """Build the requested feature set and return the deterministic column order."""
 
     _ensure_pandas_available()
-    normalized_name = str(feature_set).strip().lower()
+    normalized_name = normalize_feature_set_name(feature_set)
+    if normalized_name in _UNIVERSE_FEATURE_OBSERVATION_COLUMNS:
+        raise ValueError(f"Feature set '{feature_set}' requires multi-symbol universe context")
     if normalized_name not in _FEATURE_REGISTRY:
         raise ValueError(f"Unknown feature set '{feature_set}'")
     spec = _FEATURE_REGISTRY[normalized_name]
@@ -104,6 +125,7 @@ def build_features(
     frame = spec.builder(prepared.copy(), options_payload)
     frame.sort_values("timestamp", inplace=True, kind="mergesort")
     frame.reset_index(drop=True, inplace=True)
+    frame = _order_columns(frame, spec.observation_columns)
     _validate_columns(frame, spec.observation_columns)
     return FeatureSetResult(
         frame=frame,
@@ -111,6 +133,27 @@ def build_features(
         feature_set=spec.name,
         inputs_used=feature_hashes,
     )
+
+
+def normalize_feature_set_name(feature_set: str) -> str:
+    name = str(feature_set or "").strip().lower()
+    if not name:
+        raise ValueError("feature_set must be provided")
+    return name
+
+
+def is_universe_feature_set(feature_set: str) -> bool:
+    normalized = normalize_feature_set_name(feature_set)
+    return normalized in _UNIVERSE_FEATURE_OBSERVATION_COLUMNS
+
+
+def observation_columns_for_feature_set(feature_set: str) -> Tuple[str, ...]:
+    normalized = normalize_feature_set_name(feature_set)
+    if normalized in _FEATURE_REGISTRY:
+        return _FEATURE_REGISTRY[normalized].observation_columns
+    if normalized in _UNIVERSE_FEATURE_OBSERVATION_COLUMNS:
+        return _UNIVERSE_FEATURE_OBSERVATION_COLUMNS[normalized]
+    raise ValueError(f"Unknown feature set '{feature_set}'")
 
 
 def _prepare_equity_frame(equity_df: "pd.DataFrame") -> "pd.DataFrame":
@@ -165,14 +208,112 @@ def _validate_columns(frame: "pd.DataFrame", observation_columns: Sequence[str])
         raise ValueError(f"Feature set missing required columns: {missing}")
 
 
+def _order_columns(frame: "pd.DataFrame", observation_columns: Sequence[str]) -> "pd.DataFrame":
+    columns = list(frame.columns)
+    if "timestamp" not in columns:
+        raise ValueError("Feature frames must include timestamp columns")
+    ordered = ["timestamp"]
+    for column in observation_columns:
+        if column not in ordered:
+            ordered.append(column)
+    remainder = [column for column in columns if column not in ordered]
+    return frame[ordered + remainder]
+
+
 def _ensure_pandas_available() -> None:
     if pd is None:
         raise RuntimeError("pandas is required for feature registry operations") from _PANDAS_ERROR
 
 
+def build_universe_feature_panel(
+    feature_results: Mapping[str, FeatureSetResult],
+    *,
+    symbol_order: Sequence[str] | None = None,
+    calendar: "pd.DatetimeIndex | Sequence[object] | None" = None,
+    forward_fill_limit: int = 3,
+    fill_value: float = 0.0,
+) -> UniverseFeaturePanel:
+    """Align feature frames for multiple symbols on a shared calendar."""
+
+    _ensure_pandas_available()
+    if not feature_results:
+        raise ValueError("feature_results cannot be empty")
+    order = tuple(dict.fromkeys((symbol_order or sorted(feature_results.keys()))))
+    if len(order) != len(set(order)):
+        raise ValueError("symbol_order must not contain duplicates")
+    missing = [symbol for symbol in order if symbol not in feature_results]
+    if missing:
+        raise ValueError(f"feature_results missing symbols: {missing}")
+    base_columns: Tuple[str, ...] | None = None
+    union_index: "pd.DatetimeIndex | None" = None
+    if calendar is not None:
+        union_index = pd.DatetimeIndex(pd.to_datetime(calendar, utc=True))
+        union_index = pd.DatetimeIndex(union_index.sort_values().unique(), tz=union_index.tz)
+    per_symbol_frames: Dict[str, "pd.DataFrame"] = {}
+    for symbol in order:
+        result = feature_results[symbol]
+        if base_columns is None:
+            base_columns = result.observation_columns
+        elif base_columns != result.observation_columns:
+            raise ValueError("All feature sets must expose identical observation columns in universe mode")
+        frame = result.frame.copy()
+        if frame.empty:
+            continue
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+        frame.set_index("timestamp", inplace=True)
+        if union_index is None:
+            union_index = frame.index
+        else:
+            union_index = union_index.union(frame.index)
+        per_symbol_frames[symbol] = frame
+    if union_index is None or union_index.empty:
+        raise ValueError("No overlapping timestamps found across feature frames")
+    union_index = pd.DatetimeIndex(union_index.sort_values(), tz=union_index.tz)
+    normalized_frames: Dict[str, "pd.DataFrame"] = {}
+    ffill_limit = max(0, int(forward_fill_limit))
+    for symbol in order:
+        frame = per_symbol_frames.get(symbol)
+        if frame is None or frame.empty:
+            aligned = pd.DataFrame(index=union_index, columns=base_columns or [])
+        else:
+            aligned = frame.reindex(union_index)
+        if ffill_limit > 0:
+            aligned = aligned.ffill(limit=ffill_limit)
+        normalized_frames[symbol] = aligned
+    valid_mask = pd.Series(True, index=union_index)
+    for aligned in normalized_frames.values():
+        if "close" not in aligned.columns:
+            raise ValueError("Feature frames must include 'close' columns for valuation")
+        valid_mask &= aligned["close"].notna()
+    valid_index = union_index[valid_mask.to_numpy()]
+    if len(valid_index) < 2:
+        raise ValueError("Universe alignment requires at least two overlapping timestamps")
+    rows: List[Dict[str, object]] = []
+    fill_number = float(fill_value)
+    for timestamp in valid_index:
+        panel: Dict[str, Dict[str, float]] = {}
+        for symbol in order:
+            aligned = normalized_frames[symbol]
+            features: Dict[str, float] = {}
+            for column in base_columns or ():
+                value = aligned.at[timestamp, column] if timestamp in aligned.index else float("nan")
+                if pd.isna(value):
+                    value = fill_number
+                features[column] = float(value)
+            panel[symbol] = features
+        rows.append({"timestamp": timestamp.to_pydatetime(), "panel": panel})
+    return UniverseFeaturePanel(rows=rows, symbol_order=order, observation_columns=base_columns or tuple())
+
+
 _FEATURE_REGISTRY: Dict[str, _FeatureSetSpec] = {
     "sma_v1": _FeatureSetSpec(
         name="sma_v1",
+        observation_columns=SMA_OBSERVATION_COLUMNS,
+        requires_options=False,
+        builder=_sma_only_builder,
+    ),
+    "sma_universe_v1": _FeatureSetSpec(
+        name="sma_universe_v1",
         observation_columns=SMA_OBSERVATION_COLUMNS,
         requires_options=False,
         builder=_sma_only_builder,
@@ -192,4 +333,17 @@ _FEATURE_REGISTRY: Dict[str, _FeatureSetSpec] = {
 }
 
 
-__all__ = ["FeatureSetResult", "build_features", "strategy_to_feature_frame", "SMA_OBSERVATION_COLUMNS", "OPTIONS_OBSERVATION_COLUMNS"]
+__all__ = [
+    "FeatureSetResult",
+    "UniverseFeaturePanel",
+    "build_features",
+    "build_universe_feature_panel",
+    "strategy_to_feature_frame",
+    "SMA_OBSERVATION_COLUMNS",
+    "OPTIONS_OBSERVATION_COLUMNS",
+    "SMA_PLUS_XSEC_OBSERVATION_COLUMNS",
+    "EQUITY_XSEC_OBSERVATION_COLUMNS",
+    "normalize_feature_set_name",
+    "is_universe_feature_set",
+    "observation_columns_for_feature_set",
+]
