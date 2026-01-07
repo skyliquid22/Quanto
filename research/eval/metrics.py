@@ -8,6 +8,7 @@ from statistics import median
 from typing import Dict, List, Mapping, Sequence, Tuple, Literal
 
 from research.risk import PROJECTION_TOLERANCE, RiskConfig
+from research.hierarchy.modes import normalize_mode
 
 _DEFAULT_PRECISION = 10
 
@@ -86,13 +87,14 @@ def compute_metric_bundle(
     config: MetricConfig | None = None,
     regime_feature_series: Sequence[Sequence[float]] | None = None,
     regime_feature_names: Sequence[str] | None = None,
+    mode_series: Sequence[str] | None = None,
 ) -> MetricResult:
     """Compute portfolio, trading, and safety metrics."""
 
     cfg = config or MetricConfig()
     returns = _simple_returns(account_values)
     perf = _performance_metrics(account_values, returns, cfg)
-    trading, constraint_diag = _trading_metrics(
+    trading, constraint_diag, exposures, turnover_by_step = _trading_metrics(
         account_values,
         weights,
         transaction_costs,
@@ -101,6 +103,23 @@ def compute_metric_bundle(
         regime_feature_series,
         regime_feature_names,
     )
+    mode_diag = _mode_diagnostics(
+        mode_series,
+        exposures,
+        turnover_by_step,
+        returns,
+        cfg.float_precision,
+    )
+    trading.update(
+        {
+            "mode_counts": mode_diag["counts"],
+            "mode_transitions": mode_diag["transitions"],
+            "avg_exposure_by_mode": mode_diag["exposure"],
+            "avg_turnover_by_mode": mode_diag["turnover"],
+        }
+    )
+    if mode_diag["performance"]:
+        perf["performance_by_mode"] = mode_diag["performance"]
     safety = _safety_checks(account_values, weights, returns, transaction_costs)
     for key, value in constraint_diag.items():
         safety[key] = float(value)
@@ -160,7 +179,7 @@ def _trading_metrics(
     cfg: MetricConfig,
     regime_feature_series: Sequence[Sequence[float]] | None,
     regime_feature_names: Sequence[str] | None,
-) -> Tuple[Dict[str, float], Dict[str, float]]:
+) -> Tuple[Dict[str, float], Dict[str, float], List[float], List[float]]:
     symbol_order = tuple(dict.fromkeys(symbols))
     turnover_steps: List[float] = []
     exposures: List[float] = []
@@ -211,7 +230,7 @@ def _trading_metrics(
         precision,
     )
     trading_metrics.update(regime_diag)
-    return trading_metrics, constraint_diag
+    return trading_metrics, constraint_diag, exposures, turnover_by_step
 
 
 def _safety_checks(
@@ -355,6 +374,59 @@ def _regime_diagnostics(
     diagnostics["avg_turnover_by_regime"] = turnover_diag
     diagnostics["regime_feature_summary"] = summary_diag
     return diagnostics
+
+
+def _mode_diagnostics(
+    mode_series: Sequence[str] | None,
+    exposures: Sequence[float],
+    turnover_by_step: Sequence[float],
+    returns: Sequence[float],
+    precision: int,
+) -> Dict[str, Dict[str, object]]:
+    diag = {
+        "counts": {},
+        "transitions": {},
+        "exposure": {},
+        "turnover": {},
+        "performance": {},
+    }
+    if not mode_series:
+        return diag
+    steps = min(len(mode_series), max(len(exposures) - 1, 0), max(len(turnover_by_step) - 1, 0), len(returns))
+    if steps <= 0:
+        return diag
+    counts: Dict[str, int] = {}
+    exposure_accum: Dict[str, List[float]] = {}
+    turnover_accum: Dict[str, List[float]] = {}
+    perf_accum: Dict[str, List[float]] = {}
+    transitions: Dict[str, int] = {}
+    prev_mode: str | None = None
+    for idx in range(steps):
+        mode_name = normalize_mode(mode_series[idx])
+        counts[mode_name] = counts.get(mode_name, 0) + 1
+        exposure_accum.setdefault(mode_name, []).append(float(exposures[idx + 1]))
+        turnover_accum.setdefault(mode_name, []).append(float(turnover_by_step[idx + 1]))
+        perf_accum.setdefault(mode_name, []).append(float(returns[idx]))
+        if prev_mode is not None:
+            key = f"{prev_mode}->{mode_name}"
+            transitions[key] = transitions.get(key, 0) + 1
+        prev_mode = mode_name
+    diag["counts"] = {mode: counts[mode] for mode in sorted(counts)}
+    diag["transitions"] = {key: transitions[key] for key in sorted(transitions)}
+    diag["exposure"] = {
+        mode: _round(_mean(values), precision) for mode, values in sorted(exposure_accum.items())
+    }
+    diag["turnover"] = {
+        mode: _round(_mean(values), precision) for mode, values in sorted(turnover_accum.items())
+    }
+    performance: Dict[str, float] = {}
+    for mode, values in perf_accum.items():
+        growth = 1.0
+        for ret in values:
+            growth *= 1.0 + ret
+        performance[mode] = _round(growth - 1.0, precision)
+    diag["performance"] = {mode: performance[mode] for mode in sorted(performance)}
+    return diag
 
 
 def _simple_returns(account_values: Sequence[float]) -> List[float]:

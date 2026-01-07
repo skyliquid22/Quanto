@@ -68,6 +68,7 @@ class SignalWeightTradingEnv:
         self._step_index: int = 0
         self._done: bool = False
         self._observation_columns = self._build_observation_headers()
+        self._mode_timeline: List[str | None] = []
 
     @property
     def observation_columns(self) -> Tuple[str, ...]:
@@ -102,9 +103,15 @@ class SignalWeightTradingEnv:
         self._current_weights = [0.0 for _ in range(self._num_assets)]
         self._step_index = 0
         self._done = False
+        self._mode_timeline = []
         return self._build_observation()
 
-    def step(self, action: float | Sequence[float]) -> Tuple[Tuple[float, ...], float, bool, Mapping[str, object]]:
+    def step(
+        self,
+        action: float | Sequence[float],
+        *,
+        mode: str | None = None,
+    ) -> Tuple[Tuple[float, ...], float, bool, Mapping[str, object]]:
         if self._done:
             raise RuntimeError("cannot step once the environment is done; call reset() first")
 
@@ -150,7 +157,14 @@ class SignalWeightTradingEnv:
         if regime_values:
             info["regime_features"] = regime_values
             info["regime_state"] = row.get("regime_state")
+        if mode is not None:
+            info["mode"] = str(mode)
+        self._mode_timeline.append(mode)
         return self._build_observation(), reward, done, info
+
+    @property
+    def mode_timeline(self) -> Tuple[str | None, ...]:
+        return tuple(self._mode_timeline)
 
     def _prepare_action(self, value: float | Sequence[float]) -> List[float]:
         low, high = self.config.action_clip

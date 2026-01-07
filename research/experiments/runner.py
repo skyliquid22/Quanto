@@ -3,19 +3,35 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from infra.paths import get_data_root as default_data_root
+from research.datasets.canonical_equity_loader import build_union_calendar, load_canonical_equity
+from research.envs.signal_weight_env import SignalWeightEnvConfig, SignalWeightTradingEnv
+from research.eval.evaluate import EvaluationMetadata, evaluation_payload, from_rollout
+from research.eval.metrics import MetricConfig
 from research.experiments.ablation import SweepExperiment, SweepResult
 from research.experiments.registry import ExperimentPaths, ExperimentRegistry
 from research.experiments.spec import ExperimentSpec
 from research.experiments.sweep import SweepSpec, expand_sweep_entries
-from scripts.evaluate_agent import run_evaluation as evaluate_cli
+from research.features.feature_eng import build_sma_feature_result, build_universe_feature_results
+from research.features.feature_registry import (
+    build_universe_feature_panel,
+    is_universe_feature_set,
+    normalize_feature_set_name,
+)
+from research.hierarchy.allocator_registry import build_allocator
+from research.hierarchy.controller import ControllerConfig, ModeController
+from research.hierarchy.policy_wrapper import HierarchicalPolicy, run_hierarchical_rollout
+from research.risk import RiskConfig
+from research.strategies.sma_crossover import SMAStrategyConfig
+from scripts.evaluate_agent import run_evaluation as evaluate_cli, _derive_run_id
 from scripts.train_ppo_weight_agent import run_training as train_ppo_cli
 
 
@@ -72,6 +88,8 @@ def run_experiment(
             "metrics_path": str(metrics_path),
             "runs_dir": str(paths.runs_dir),
             "evaluation_dir": str(paths.evaluation_dir),
+            "hierarchy_enabled": bool(spec.hierarchy_enabled),
+            "mode_timeline_path": evaluation_summary.get("mode_timeline_path"),
         },
     )
     return ExperimentResult(
@@ -214,6 +232,8 @@ def _run_evaluation(
     evaluation_dir: Path,
     checkpoint_path: Path | None,
 ) -> tuple[Mapping[str, Any], Dict[str, Any], Path]:
+    if spec.hierarchy_enabled:
+        return _run_hierarchical_evaluation(spec, data_root, evaluation_dir)
     policy = spec.policy
     params = dict(spec.policy_params)
     fast_window: int
@@ -278,6 +298,109 @@ def _run_evaluation(
     return summary, payload, metrics_path
 
 
+def _run_hierarchical_evaluation(
+    spec: ExperimentSpec,
+    data_root: Path,
+    evaluation_dir: Path,
+) -> tuple[Mapping[str, Any], Dict[str, Any], Path]:
+    symbols = list(spec.symbols)
+    if len(symbols) < 2:
+        raise ValueError("Hierarchical experiments require at least two symbols.")
+    if not spec.controller_config or not spec.allocator_by_mode:
+        raise ValueError("Hierarchical experiments require controller and allocator configs.")
+    evaluation_dir.mkdir(parents=True, exist_ok=True)
+    slices, canonical_hashes = load_canonical_equity(
+        symbols,
+        spec.start_date,
+        spec.end_date,
+        data_root=data_root,
+        interval=spec.interval,
+    )
+    (
+        rows,
+        observation_columns,
+        feature_hashes,
+        feature_set_name,
+        sma_config,
+    ) = _build_hierarchical_rows(spec, slices, data_root)
+    env_config = SignalWeightEnvConfig(
+        transaction_cost_bp=spec.cost_config.transaction_cost_bp,
+        risk_config=spec.risk_config,
+    )
+    env = SignalWeightTradingEnv(rows, config=env_config, observation_columns=observation_columns)
+    controller_cfg = ControllerConfig.from_mapping(spec.controller_config)
+    controller = ModeController(config=controller_cfg)
+    allocators = {
+        mode: build_allocator(entry, num_assets=env.num_assets)
+        for mode, entry in spec.allocator_by_mode.items()
+    }
+    policy = HierarchicalPolicy(controller, allocators, spec.risk_config)
+    rollout = run_hierarchical_rollout(env, policy, rows=rows)
+    ordered_inputs = dict(sorted({**canonical_hashes, **feature_hashes}.items()))
+    policy_signature = {
+        "controller": controller_cfg.to_dict(),
+        "allocators": spec.allocator_by_mode,
+    }
+    policy_id = _hierarchical_policy_id(policy_signature)
+    metadata = EvaluationMetadata(
+        symbols=tuple(symbols),
+        start_date=spec.start_date.isoformat(),
+        end_date=spec.end_date.isoformat(),
+        interval=spec.interval,
+        feature_set=feature_set_name,
+        policy_id=policy_id,
+        run_id=_derive_run_id(
+            symbols,
+            spec.start_date,
+            spec.end_date,
+            spec.interval,
+            feature_set_name,
+            policy_id,
+            env_config,
+            ordered_inputs,
+            policy_signature,
+        ),
+        policy_details={
+            "type": "hierarchical",
+            "controller": controller_cfg.to_dict(),
+            "allocators": spec.allocator_by_mode,
+            "sma_config": {
+                "fast_window": sma_config.fast_window,
+                "slow_window": sma_config.slow_window,
+            },
+        },
+    )
+    series = from_rollout(
+        timestamps=rollout.timestamps,
+        account_values=rollout.account_values,
+        weights=rollout.weights,
+        transaction_costs=rollout.transaction_costs,
+        symbols=rollout.symbols,
+        rollout_metadata={"modes": rollout.modes},
+        regime_features=rollout.regime_features,
+        regime_feature_names=rollout.regime_feature_names,
+        modes=rollout.modes,
+    )
+    payload = evaluation_payload(
+        series,
+        metadata,
+        inputs_used=ordered_inputs,
+        config=MetricConfig(risk_config=spec.risk_config),
+    )
+    metrics_path = evaluation_dir / "metrics.json"
+    metrics_path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+    timeline_path = _write_mode_timeline(rollout.timestamps[1:], rollout.modes, evaluation_dir)
+    summary = {
+        "metrics_path": str(metrics_path),
+        "run_id": metadata.run_id,
+        "policy_id": policy_id,
+        "total_return": payload["performance"].get("total_return"),
+        "sharpe": payload["performance"].get("sharpe"),
+        "mode_timeline_path": str(timeline_path),
+    }
+    return summary, payload, metrics_path
+
+
 def _finalize_metrics(metrics_src: Path, evaluation_dir: Path) -> Path:
     destination = evaluation_dir / "metrics.json"
     if metrics_src.resolve() == destination.resolve():
@@ -305,6 +428,76 @@ def _write_rollout_artifact(
     }
     rollout_path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
     return rollout_path
+
+
+def _build_hierarchical_rows(
+    spec: ExperimentSpec,
+    slices,
+    data_root: Path,
+) -> Tuple[List[Mapping[str, object]], Tuple[str, ...], Dict[str, str], str, SMAStrategyConfig]:
+    symbols = list(spec.symbols)
+    normalized_feature_set = normalize_feature_set_name(spec.feature_set)
+    sma_config = SMAStrategyConfig(
+        fast_window=int(spec.policy_params.get("fast_window", 20)),
+        slow_window=int(spec.policy_params.get("slow_window", 50)),
+    )
+    per_symbol_features: Dict[str, Any] = {}
+    feature_hashes: Dict[str, str] = {}
+    if is_universe_feature_set(normalized_feature_set):
+        per_symbol_features = build_universe_feature_results(
+            normalized_feature_set,
+            slices,
+            symbol_order=symbols,
+            start_date=spec.start_date,
+            end_date=spec.end_date,
+            sma_config=sma_config,
+            data_root=data_root,
+        )
+    else:
+        for symbol in symbols:
+            slice_data = slices[symbol]
+            feature_result = build_sma_feature_result(
+                slice_data,
+                fast_window=sma_config.fast_window,
+                slow_window=sma_config.slow_window,
+                feature_set=spec.feature_set,
+                start_date=spec.start_date,
+                end_date=spec.end_date,
+                data_root=data_root,
+            )
+            per_symbol_features[symbol] = feature_result
+    if not per_symbol_features:
+        raise RuntimeError("Failed to build feature frames for hierarchical evaluation")
+    feature_set_name = next(iter(per_symbol_features.values())).feature_set
+    for symbol, result in per_symbol_features.items():
+        for key, value in result.inputs_used.items():
+            feature_hashes[f"{symbol}:{key}"] = value
+    calendar = build_union_calendar(slices, start_date=spec.start_date, end_date=spec.end_date)
+    panel = build_universe_feature_panel(
+        per_symbol_features,
+        symbol_order=symbols,
+        calendar=calendar,
+        forward_fill_limit=3,
+        regime_feature_set=spec.regime_feature_set,
+    )
+    return panel.rows, panel.observation_columns, feature_hashes, feature_set_name, sma_config
+
+
+def _hierarchical_policy_id(signature: Mapping[str, Any]) -> str:
+    digest = hashlib.sha256(
+        json.dumps(signature, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f"hierarchical_{digest[:12]}"
+
+
+def _write_mode_timeline(timestamps: Sequence[str], modes: Sequence[str], evaluation_dir: Path) -> Path:
+    timeline = [
+        {"timestamp": timestamps[idx], "mode": modes[idx] if idx < len(modes) else ""}
+        for idx in range(min(len(timestamps), len(modes)))
+    ]
+    path = evaluation_dir / "mode_timeline.json"
+    path.write_text(json.dumps(timeline, sort_keys=True, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+    return path
 
 
 def _resolve_data_root(data_root: Path | None) -> Path:

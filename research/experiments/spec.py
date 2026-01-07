@@ -15,6 +15,7 @@ except Exception:  # pragma: no cover
 
 from research.risk import RiskConfig
 from research.features.feature_registry import normalize_regime_feature_set_name
+from research.hierarchy.modes import ensure_mode_inventory, normalize_mode
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,9 @@ class ExperimentSpec:
     risk_config: RiskConfig = RiskConfig()
     notes: str | None = None
     regime_feature_set: str | None = None
+    hierarchy_enabled: bool = False
+    controller_config: Mapping[str, Any] | None = None
+    allocator_by_mode: Mapping[str, Mapping[str, Any]] | None = None
 
     @classmethod
     def from_file(cls, path: str | Path) -> ExperimentSpec:
@@ -90,6 +94,21 @@ class ExperimentSpec:
         normalized_regime = None
         if regime_feature_set:
             normalized_regime = normalize_regime_feature_set_name(str(regime_feature_set))
+        hierarchy_enabled = bool(payload.get("hierarchy_enabled", False))
+        controller_config = _normalize_mapping(payload.get("controller_config")) or None
+        allocator_by_mode = _normalize_allocator_mapping(payload.get("allocator_by_mode")) or None
+        if hierarchy_enabled:
+            if not normalized_regime:
+                raise ValueError("hierarchy_enabled requires regime_feature_set to be provided")
+            if not controller_config:
+                raise ValueError("controller_config must be provided when hierarchy_enabled")
+            if not allocator_by_mode:
+                raise ValueError("allocator_by_mode must be provided when hierarchy_enabled")
+            _validate_controller_config(controller_config)
+            _validate_allocator_configs(allocator_by_mode)
+        else:
+            if controller_config or allocator_by_mode:
+                raise ValueError("controller_config and allocator_by_mode require hierarchy_enabled=True")
         return cls(
             experiment_name=experiment_name,
             symbols=symbols,
@@ -104,6 +123,9 @@ class ExperimentSpec:
             seed=seed,
             notes=normalized_notes,
             regime_feature_set=normalized_regime,
+            hierarchy_enabled=hierarchy_enabled,
+            controller_config=controller_config,
+            allocator_by_mode=allocator_by_mode,
         )
 
     @property
@@ -122,6 +144,9 @@ class ExperimentSpec:
             "risk_config": self.risk_config.to_dict(),
             "seed": int(self.seed),
             "notes": self.notes or "",
+            "hierarchy_enabled": bool(self.hierarchy_enabled),
+            "controller_config": _canonicalize(self.controller_config or {}),
+            "allocator_by_mode": _canonicalize(self.allocator_by_mode or {}),
         }
         return payload
 
@@ -142,6 +167,10 @@ class ExperimentSpec:
             payload.pop("notes", None)
         if self.regime_feature_set is None:
             payload.pop("regime_feature_set", None)
+        if not self.hierarchy_enabled:
+            payload.pop("hierarchy_enabled", None)
+            payload.pop("controller_config", None)
+            payload.pop("allocator_by_mode", None)
         return payload
 
 
@@ -218,6 +247,47 @@ def _normalize_mapping(value: Any) -> Dict[str, Any]:
     for key, entry in value.items():
         normalized[str(key)] = _coerce_json(entry)
     return normalized
+
+
+def _normalize_allocator_mapping(value: Any) -> Dict[str, Dict[str, Any]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("allocator_by_mode must be a mapping")
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for key, entry in value.items():
+        normalized[str(key)] = _normalize_mapping(entry)
+    return normalized
+
+
+def _validate_controller_config(config: Mapping[str, Any]) -> None:
+    freq = str(config.get("update_frequency", "")).strip().lower()
+    if freq not in {"weekly", "monthly", "every_k_steps"}:
+        raise ValueError("controller_config.update_frequency must be weekly, monthly, or every_k_steps")
+    min_hold = int(config.get("min_hold_steps", 0))
+    if min_hold < 0:
+        raise ValueError("controller_config.min_hold_steps must be non-negative")
+    for key in ("vol_threshold_high", "trend_threshold_high", "dispersion_threshold_high"):
+        if key not in config:
+            raise ValueError(f"controller_config.{key} must be provided")
+        float(config[key])
+    fallback = normalize_mode(config.get("fallback_mode", "neutral"))
+    if freq == "every_k_steps":
+        k_value = config.get("k", config.get("every_k_steps"))
+        if k_value is None:
+            raise ValueError("controller_config.k must be provided for every_k_steps frequency")
+        if int(k_value) <= 0:
+            raise ValueError("controller_config.k must be positive")
+    config["fallback_mode"] = fallback
+
+
+def _validate_allocator_configs(configs: Mapping[str, Mapping[str, Any]]) -> None:
+    ensure_mode_inventory(configs.keys())
+    for mode, entry in configs.items():
+        if "type" not in entry:
+            raise ValueError(f"allocator config for mode '{mode}' must include a type")
+        if not str(entry["type"]).strip():
+            raise ValueError(f"allocator config for mode '{mode}' must include a type")
 
 
 def _coerce_json(value: Any) -> Any:

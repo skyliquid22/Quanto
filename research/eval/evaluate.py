@@ -16,6 +16,9 @@ class EvalSeries:
     transaction_costs: Sequence[float]
     symbols: Sequence[str]
     rollout_metadata: Mapping[str, object] | None = None
+    regime_features: Sequence[Sequence[float]] | None = None
+    regime_feature_names: Sequence[str] | None = None
+    modes: Sequence[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,9 @@ def evaluation_payload(
         transaction_costs=_align_costs(series.account_values, series.transaction_costs),
         symbols=series.symbols,
         config=cfg,
+        regime_feature_series=series.regime_features,
+        regime_feature_names=series.regime_feature_names,
+        mode_series=series.modes,
     )
     metadata_section = _metadata_section(metadata, series.rollout_metadata)
     payload = {
@@ -77,6 +83,9 @@ def from_rollout(
     transaction_costs: Sequence[float] | None,
     symbols: Sequence[str],
     rollout_metadata: Mapping[str, object] | None = None,
+    regime_features: Sequence[Sequence[float]] | None = None,
+    regime_feature_names: Sequence[str] | None = None,
+    modes: Sequence[str] | None = None,
 ) -> EvalSeries:
     costs = _align_costs(account_values, transaction_costs)
     return EvalSeries(
@@ -86,6 +95,9 @@ def from_rollout(
         transaction_costs=costs,
         symbols=tuple(symbols),
         rollout_metadata=dict(rollout_metadata or {}),
+        regime_features=list(regime_features) if regime_features else None,
+        regime_feature_names=tuple(regime_feature_names) if regime_feature_names else None,
+        modes=list(modes) if modes else None,
     )
 
 
@@ -108,13 +120,16 @@ def _metadata_section(metadata: EvaluationMetadata, rollout_metadata: Mapping[st
 
 def _series_section(series: EvalSeries, metrics: MetricResult) -> Dict[str, Any]:
     weights_series = _weights_series(series.weights, series.symbols)
-    return {
+    payload = {
         "timestamps": list(series.timestamps),
         "account_value": list(series.account_values),
         "returns": metrics.returns,
         "transaction_costs": list(series.transaction_costs),
         "weights": weights_series,
     }
+    if series.modes:
+        payload["modes"] = list(series.modes)
+    return payload
 
 
 def _weights_series(weights: Sequence[Mapping[str, float]], symbols: Sequence[str]) -> Any:  # type: ignore[override]
