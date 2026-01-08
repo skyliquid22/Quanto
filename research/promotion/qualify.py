@@ -58,6 +58,7 @@ def run_qualification(
         sweep_summary=evaluation.sweep_summary,
         regime_qualification=evaluation.regime_report,
         execution_qualification=evaluation.execution_report,
+        execution_metrics_resolution=evaluation.execution_resolution,
     )
     path = write_qualification_report(candidate_record, report)
     return QualificationResult(report=report, report_path=path)

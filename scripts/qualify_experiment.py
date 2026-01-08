@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any, Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover - CLI import path
@@ -119,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         f"Qualification FAILED for {result.report.experiment_id}. Reasons: "
         f"{result.report.failed_hard}. Report: {result.report_path}"
     )
+    _print_execution_resolution(result.report.execution_metrics_resolution)
     if result.report.failed_soft:
         print(  # noqa: T201 - CLI feedback
             f"Soft warnings: {result.report.failed_soft}"
@@ -128,3 +130,20 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
+
+def _print_execution_resolution(resolution: Mapping[str, Any] | None) -> None:
+    if not resolution:
+        return
+    for label in ("candidate", "baseline"):
+        entry = resolution.get(label)
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("found"):
+            continue
+        attempted = entry.get("attempted") or []
+        preview = attempted[:3]
+        if preview:
+            print(  # noqa: T201 - CLI feedback
+                f"{label.title()} execution metrics missing. Attempted paths: {preview}"
+            )

@@ -13,6 +13,10 @@ from research.experiments.comparator import compare_experiments
 from research.experiments.registry import ExperimentRecord, ExperimentRegistry
 from research.experiments.regression import RegressionGateRule, default_gate_rules, evaluate_gates
 from research.promotion.execution_criteria import ExecutionQualificationCriteria
+from research.promotion.execution_metrics_locator import (
+    ExecutionMetricsLocatorResult,
+    locate_execution_metrics,
+)
 from research.promotion.regime_criteria import RegimeQualificationCriteria
 
 _SANITY_TURNOVER_METRIC = "trading.turnover_1d_mean"
@@ -116,6 +120,7 @@ class QualificationEvaluation:
     sweep_summary: Mapping[str, Any] | None
     regime_report: Mapping[str, Any] | None = None
     execution_report: Mapping[str, Any] | None = None
+    execution_resolution: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -154,10 +159,13 @@ class QualificationCriteria:
         same_identifier = candidate_record.experiment_id == baseline_record.experiment_id
         resolved_rules = list(gate_rules) if gate_rules else default_gate_rules()
         gate_report = evaluate_gates(comparison, resolved_rules)
+        registry_root = registry.root
+        shadow_root = registry_root.parent / "shadow"
         metrics_payload = _load_metrics(candidate_record.metrics_path)
         baseline_metrics = _load_metrics(baseline_record.metrics_path)
         failed_hard: List[str] = []
         failed_soft: List[str] = []
+        execution_resolution: Dict[str, Any] = {}
 
         if gate_report.overall_status == "fail":
             failed_hard.append("regression_gates_failed")
@@ -194,6 +202,28 @@ class QualificationCriteria:
             if regime_reason:
                 self._route_failure(regime_reason, self.regime_diagnostics.severity, failed_hard, failed_soft)
 
+        candidate_resolution = locate_execution_metrics(
+            candidate_record.experiment_id,
+            registry_root=registry_root,
+            shadow_root=shadow_root,
+        )
+        execution_resolution["candidate"] = candidate_resolution.to_dict()
+        if candidate_resolution.found:
+            metrics_payload = _attach_execution_section(metrics_payload, candidate_resolution)
+        else:
+            failed_hard.append("execution_metrics_missing")
+
+        baseline_resolution = locate_execution_metrics(
+            baseline_record.experiment_id,
+            registry_root=registry_root,
+            shadow_root=shadow_root,
+        )
+        execution_resolution["baseline"] = baseline_resolution.to_dict()
+        if baseline_resolution.found:
+            baseline_metrics = _attach_execution_section(baseline_metrics, baseline_resolution)
+        else:
+            failed_soft.append("execution_baseline_metrics_missing")
+
         regime_report: Mapping[str, Any] | None = None
         if self.regime_qualification is not None:
             hierarchy_enabled = self._hierarchy_enabled(candidate_record)
@@ -210,17 +240,20 @@ class QualificationCriteria:
 
         execution_report: Mapping[str, Any] | None = None
         if self.execution_qualification is not None:
+            skip_delta_checks = same_identifier or not baseline_resolution.found
             execution_eval = self.execution_qualification.evaluate(
                 comparison,
                 metrics_payload,
                 baseline_metrics,
-                skip_delta_checks=same_identifier,
+                skip_delta_checks=skip_delta_checks,
             )
             execution_report = execution_eval.report
             failed_hard.extend(execution_eval.hard_failures)
             failed_soft.extend(execution_eval.soft_failures)
             if same_identifier:
                 failed_soft.append(_PHASE1_WARNING)
+        else:
+            execution_report = None
 
         passed = not failed_hard
         return QualificationEvaluation(
@@ -232,6 +265,7 @@ class QualificationCriteria:
             sweep_summary=sweep_summary,
             regime_report=regime_report,
             execution_report=execution_report,
+            execution_resolution=execution_resolution,
         )
 
     def _constraint_reason(self, metrics_payload: Mapping[str, Any]) -> str | None:
@@ -352,6 +386,41 @@ def _as_float(value: Any) -> float | None:
     if not math.isfinite(number):
         return None
     return float(number)
+
+
+def _attach_execution_section(
+    metrics_payload: Mapping[str, Any],
+    locator_result: ExecutionMetricsLocatorResult,
+) -> Mapping[str, Any]:
+    payload = dict(metrics_payload)
+    exec_path = locator_result.execution_metrics_path
+    metrics_path = locator_result.metrics_path
+    if locator_result.source == "embedded":
+        target = metrics_path or exec_path
+        if target and target.exists():
+            try:
+                data = json.loads(target.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return payload
+            execution = data.get("execution")
+            if execution is not None:
+                payload["execution"] = execution
+        return payload
+    if exec_path and exec_path.exists():
+        try:
+            payload["execution"] = json.loads(exec_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return payload
+        return payload
+    if metrics_path and metrics_path.exists():
+        try:
+            data = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return payload
+        execution = data.get("execution")
+        if execution is not None:
+            payload["execution"] = execution
+    return payload
 
 
 def _coerce_int(value: Any) -> int:

@@ -280,6 +280,31 @@ def test_phase1_delta_gates_skipped_with_warning(tmp_path: Path):
     exec_report = evaluation.execution_report or {}
     gate_messages = [gate.get("message") for gate in exec_report.get("gates", []) if gate.get("severity") == "soft"]
     assert "phase1_delta_skip" in gate_messages
+    resolution = evaluation.execution_resolution or {}
+    assert resolution["candidate"]["found"] is True
+    assert resolution["baseline"]["found"] is True
+
+
+def test_execution_metrics_missing_records_attempts(tmp_path: Path):
+    registry = ExperimentRegistry(root=tmp_path)
+    _write_experiment(
+        tmp_path,
+        "candidate",
+        sharpe=1.0,
+        max_drawdown=0.1,
+        turnover=0.05,
+        include_execution=False,
+    )
+    evaluation = QualificationCriteria(max_drawdown=0.5, max_turnover=0.5).evaluate(
+        registry.get("candidate"),
+        registry.get("candidate"),
+        registry=registry,
+    )
+    assert "execution_metrics_missing" in evaluation.failed_hard
+    resolution = evaluation.execution_resolution or {}
+    candidate_entry = resolution.get("candidate") or {}
+    assert candidate_entry.get("found") is False
+    assert candidate_entry.get("attempted") is not None
 
 
 def test_execution_high_vol_drawdown_gate(tmp_path: Path):
