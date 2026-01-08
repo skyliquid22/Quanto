@@ -16,6 +16,7 @@ from research.promotion.execution_criteria import ExecutionQualificationCriteria
 from research.promotion.regime_criteria import RegimeQualificationCriteria
 
 _SANITY_TURNOVER_METRIC = "trading.turnover_1d_mean"
+_PHASE1_WARNING = "Baseline equals candidate; delta-based gates skipped (Phase 1 mode)."
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,7 @@ class QualificationCriteria:
             baseline_record.experiment_id,
             registry=registry,
         )
+        same_identifier = candidate_record.experiment_id == baseline_record.experiment_id
         resolved_rules = list(gate_rules) if gate_rules else default_gate_rules()
         gate_report = evaluate_gates(comparison, resolved_rules)
         metrics_payload = _load_metrics(candidate_record.metrics_path)
@@ -212,10 +214,13 @@ class QualificationCriteria:
                 comparison,
                 metrics_payload,
                 baseline_metrics,
+                skip_delta_checks=same_identifier,
             )
             execution_report = execution_eval.report
             failed_hard.extend(execution_eval.hard_failures)
             failed_soft.extend(execution_eval.soft_failures)
+            if same_identifier:
+                failed_soft.append(_PHASE1_WARNING)
 
         passed = not failed_hard
         return QualificationEvaluation(

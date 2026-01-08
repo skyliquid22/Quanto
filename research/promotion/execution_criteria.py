@@ -36,6 +36,8 @@ class ExecutionQualificationCriteria:
         comparison: ComparisonResult,
         candidate_metrics: Mapping[str, Any],
         baseline_metrics: Mapping[str, Any],
+        *,
+        skip_delta_checks: bool = False,
     ) -> ExecutionGateEvaluation:
         candidate_execution = _execution_section(candidate_metrics)
         baseline_execution = _execution_section(baseline_metrics)
@@ -103,38 +105,44 @@ class ExecutionQualificationCriteria:
             failure_reason="execution_slippage_exceeded",
         )
 
-        self._enforce_soft_delta_gate(
-            comparison_summary=comparison.execution_metrics.get("summary") if comparison.execution_metrics else {},
-            gate_id="execution_avg_slippage_delta",
-            metric="avg_slippage_bps",
-            threshold=self.soft_max_avg_slippage_delta_bps,
-            severity_failures=soft_failures,
-            gates=gates,
-            direction="absolute",
-        )
-        self._enforce_soft_delta_gate(
-            comparison_summary=comparison.execution_metrics.get("summary") if comparison.execution_metrics else {},
-            gate_id="execution_fee_drift",
-            metric="total_fees",
-            threshold=self.soft_max_fees_delta_pct,
-            severity_failures=soft_failures,
-            gates=gates,
-            direction="percent",
-        )
-        self._enforce_soft_delta_gate(
-            comparison_summary=comparison.execution_metrics.get("summary") if comparison.execution_metrics else {},
-            gate_id="execution_turnover_drift",
-            metric="turnover_realized",
-            threshold=self.soft_max_turnover_delta_pct,
-            severity_failures=soft_failures,
-            gates=gates,
-            direction="percent",
-        )
-        self._evaluate_sharpe_correlation(
-            comparison=comparison,
-            severity_failures=soft_failures,
-            gates=gates,
-        )
+        summary_block = comparison.execution_metrics.get("summary") if comparison.execution_metrics else {}
+        if skip_delta_checks:
+            _record_delta_skip(gates, "execution_avg_slippage_delta", "execution.summary.avg_slippage_bps")
+            _record_delta_skip(gates, "execution_fee_drift", "execution.summary.total_fees")
+            _record_delta_skip(gates, "execution_turnover_drift", "execution.summary.turnover_realized")
+        else:
+            self._enforce_soft_delta_gate(
+                comparison_summary=summary_block,
+                gate_id="execution_avg_slippage_delta",
+                metric="avg_slippage_bps",
+                threshold=self.soft_max_avg_slippage_delta_bps,
+                severity_failures=soft_failures,
+                gates=gates,
+                direction="absolute",
+            )
+            self._enforce_soft_delta_gate(
+                comparison_summary=summary_block,
+                gate_id="execution_fee_drift",
+                metric="total_fees",
+                threshold=self.soft_max_fees_delta_pct,
+                severity_failures=soft_failures,
+                gates=gates,
+                direction="percent",
+            )
+            self._enforce_soft_delta_gate(
+                comparison_summary=summary_block,
+                gate_id="execution_turnover_drift",
+                metric="turnover_realized",
+                threshold=self.soft_max_turnover_delta_pct,
+                severity_failures=soft_failures,
+                gates=gates,
+                direction="percent",
+            )
+            self._evaluate_sharpe_correlation(
+                comparison=comparison,
+                severity_failures=soft_failures,
+                gates=gates,
+            )
 
         report = {
             "candidate": candidate_execution,
@@ -198,6 +206,7 @@ class ExecutionQualificationCriteria:
         severity_failures: List[str],
         gates: List[Dict[str, Any]],
         direction: str,
+        skip: bool = False,
     ) -> None:
         entry = comparison_summary.get(metric) if isinstance(comparison_summary, Mapping) else None
         observed = entry.get("candidate") if isinstance(entry, Mapping) else None
@@ -208,7 +217,10 @@ class ExecutionQualificationCriteria:
         message = "within threshold"
         metric_id = f"execution.summary.{metric}"
 
-        if entry is None or (delta is None and delta_pct is None):
+        if skip:
+            status = "skip"
+            message = "phase1_delta_skip"
+        elif entry is None or (delta is None and delta_pct is None):
             status = "skip"
             message = "baseline_missing"
         else:
@@ -278,6 +290,23 @@ def _execution_section(metrics_payload: Mapping[str, Any]) -> Mapping[str, Any] 
     if isinstance(section, Mapping):
         return section
     return None
+
+
+def _record_delta_skip(gates: List[Dict[str, Any]], gate_id: str, metric: str) -> None:
+    gates.append(
+        {
+            "gate_id": gate_id,
+            "severity": "soft",
+            "status": "skip",
+            "metric": metric,
+            "observed": None,
+            "baseline": None,
+            "threshold": None,
+            "delta": None,
+            "delta_pct": None,
+            "message": "phase1_delta_skip",
+        }
+    )
 
 
 def _as_float(value: Any) -> float | None:

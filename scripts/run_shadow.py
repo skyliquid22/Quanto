@@ -34,6 +34,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--reset", action="store_true", help="Delete the run directory before executing (replay only).")
     parser.add_argument("--registry-root", help="Override the experiment registry root (defaults to repo .quanto_data).")
     parser.add_argument("--promotion-root", help="Override the promotion record root (defaults to repo .quanto_data/promotions).")
+    parser.add_argument("--output-dir", help="Override the shadow run output directory.")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a previous run directory instead of starting from scratch.",
+    )
     return parser.parse_args(argv)
 
 
@@ -72,11 +78,35 @@ def main(argv: list[str] | None = None) -> int:
         end_date=end,
         data_root=data_root,
     )
-    run_id = _derive_run_id(args.experiment_id, data_source.window)
-    run_dir = data_root / "shadow" / args.experiment_id / run_id
-    if args.reset and run_dir.exists():
-        shutil.rmtree(run_dir)
-    state_store = StateStore(args.experiment_id, run_id=run_id, base_dir=data_root / "shadow")
+    if args.output_dir:
+        run_dir = Path(args.output_dir).expanduser()
+        run_id = run_dir.name
+    else:
+        run_id = _derive_run_id(args.experiment_id, data_source.window)
+        run_dir = data_root / "shadow" / args.experiment_id / run_id
+
+    if run_dir.exists():
+        if args.reset:
+            shutil.rmtree(run_dir)
+        elif not args.resume:
+            print(  # noqa: T201
+                f"Run directory {run_dir} already exists. Pass --resume to continue or --reset to start fresh.",
+                file=sys.stderr,
+            )
+            return 8
+    else:
+        if args.resume:
+            print(  # noqa: T201
+                f"Run directory {run_dir} does not exist; cannot resume.", file=sys.stderr
+            )
+            return 9
+
+    state_store = StateStore(
+        args.experiment_id,
+        run_id=run_id,
+        base_dir=None if args.output_dir else data_root / "shadow",
+        destination=run_dir if args.output_dir else None,
+    )
     logger = ShadowLogger(run_dir)
     engine = ShadowEngine(
         experiment_id=args.experiment_id,

@@ -18,13 +18,17 @@ class StateStore:
         *,
         run_id: str | None = None,
         base_dir: Path | None = None,
+        destination: Path | None = None,
     ) -> None:
-        root = Path(base_dir) if base_dir else get_data_root() / "shadow"
-        destination = root / experiment_id
-        if run_id:
-            destination = destination / run_id
-        self._state_dir = destination
-        self._state_path = destination / "state.json"
+        if destination is not None:
+            resolved = Path(destination)
+        else:
+            root = Path(base_dir) if base_dir else get_data_root() / "shadow"
+            resolved = root / experiment_id
+            if run_id:
+                resolved = resolved / run_id
+        self._state_dir = resolved
+        self._state_path = resolved / "state.json"
 
     @property
     def state_path(self) -> Path:
@@ -46,6 +50,18 @@ class StateStore:
         serialized = json.dumps(state.to_dict(), sort_keys=True, indent=2)
         temp_path.write_text(serialized, encoding="utf-8")
         temp_path.replace(self._state_path)
+
+    @staticmethod
+    def resume_snapshot(state: ShadowState) -> dict[str, object]:
+        """Extract the portions of state required for resume-safe execution."""
+
+        return {
+            "submitted_order_ids": list(state.submitted_order_ids),
+            "open_orders": [dict(entry) for entry in state.open_orders],
+            "broker_order_map": dict(state.broker_order_map),
+            "last_completed_step_ts": state.last_completed_step_ts,
+            "last_broker_sync": state.last_broker_sync,
+        }
 
 
 __all__ = ["StateStore"]

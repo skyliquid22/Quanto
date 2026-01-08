@@ -263,6 +263,25 @@ def test_execution_sharpe_correlation_warning(tmp_path: Path):
     assert "execution_sharpe_correlated_with_slippage" in evaluation.failed_soft
 
 
+def test_phase1_delta_gates_skipped_with_warning(tmp_path: Path):
+    registry = ExperimentRegistry(root=tmp_path)
+    _write_experiment(tmp_path, "phase1", sharpe=1.0, max_drawdown=0.05, turnover=0.05)
+    record = registry.get("phase1")
+    evaluation = QualificationCriteria(max_drawdown=0.5, max_turnover=0.5).evaluate(
+        record,
+        record,
+        registry=registry,
+    )
+    assert evaluation.passed is True
+    assert any(
+        entry == "Baseline equals candidate; delta-based gates skipped (Phase 1 mode)."
+        for entry in evaluation.failed_soft
+    )
+    exec_report = evaluation.execution_report or {}
+    gate_messages = [gate.get("message") for gate in exec_report.get("gates", []) if gate.get("severity") == "soft"]
+    assert "phase1_delta_skip" in gate_messages
+
+
 def test_execution_high_vol_drawdown_gate(tmp_path: Path):
     registry = ExperimentRegistry(root=tmp_path)
     _write_experiment(
