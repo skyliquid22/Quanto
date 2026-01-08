@@ -29,6 +29,11 @@ class ShadowState:
     daily_start_value: float = 0.0
     peak_portfolio_value: float = 0.0
     submitted_order_ids: list[str] = field(default_factory=list)
+    last_completed_step_ts: str | None = None
+    broker_order_map: dict[str, str] = field(default_factory=dict)
+    unpromoted_execution_allowed: bool = False
+    unpromoted_execution_reason: str | None = None
+    baseline_allowlist_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +56,11 @@ class ShadowState:
             "daily_start_value": float(self.daily_start_value),
             "peak_portfolio_value": float(self.peak_portfolio_value),
             "submitted_order_ids": list(self.submitted_order_ids),
+            "last_completed_step_ts": self.last_completed_step_ts,
+            "broker_order_map": dict(self.broker_order_map),
+            "unpromoted_execution_allowed": bool(self.unpromoted_execution_allowed),
+            "unpromoted_execution_reason": self.unpromoted_execution_reason,
+            "baseline_allowlist_path": self.baseline_allowlist_path,
         }
 
     @classmethod
@@ -77,6 +87,11 @@ class ShadowState:
             daily_start_value=float(payload.get("daily_start_value", 0.0)),
             peak_portfolio_value=float(payload.get("peak_portfolio_value", payload.get("portfolio_value", 0.0))),
             submitted_order_ids=[str(entry) for entry in payload.get("submitted_order_ids", [])],
+            last_completed_step_ts=payload.get("last_completed_step_ts"),
+            broker_order_map={str(key): str(value) for key, value in (payload.get("broker_order_map") or {}).items()},
+            unpromoted_execution_allowed=bool(payload.get("unpromoted_execution_allowed", False)),
+            unpromoted_execution_reason=payload.get("unpromoted_execution_reason"),
+            baseline_allowlist_path=payload.get("baseline_allowlist_path"),
         )
 
 
@@ -111,6 +126,11 @@ def initial_state(
         daily_start_value=float(initial_cash),
         peak_portfolio_value=float(initial_cash),
         submitted_order_ids=[],
+        last_completed_step_ts=None,
+        broker_order_map={},
+        unpromoted_execution_allowed=False,
+        unpromoted_execution_reason=None,
+        baseline_allowlist_path=None,
     )
 
 

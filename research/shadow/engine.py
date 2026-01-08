@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
@@ -24,7 +25,12 @@ from research.hierarchy.controller import ControllerConfig, ModeController
 from research.hierarchy.policy_wrapper import HierarchicalPolicy
 from research.policies.sma_weight_policy import SMAWeightPolicy, SMAWeightPolicyConfig
 from research.promotion.qualify import is_experiment_promoted
+from research.paper.config import PollingConfig, ReconciliationConfig
+from research.paper.reconcile import PaperReconciler
+from research.paper.run import PaperExecutionController
+from research.paper.summary import ExecutionGateRunner
 from research.risk import RiskConfig, project_weights
+from research.promotion import baseline_allowlist
 from research.shadow.data_source import MarketDataSource
 from research.shadow.logging import ShadowLogger
 from research.shadow.portfolio import (
@@ -58,6 +64,9 @@ class ShadowEngine:
         promotion_root: Path | None = None,
         execution_mode: str = "none",
         execution_options: Mapping[str, Any] | None = None,
+        replay_mode: bool = False,
+        live_mode: bool = False,
+        baseline_allowlist_root: Path | None = None,
     ) -> None:
         self.experiment_id = experiment_id
         self.data_source = data_source
@@ -89,6 +98,10 @@ class ShadowEngine:
         self._execution_metrics: ExecutionMetricsRecorder | None = None
         self._execution_broker = None
         self._execution_metrics_path: Path | None = None
+        self._replay_mode = bool(replay_mode)
+        self._live_mode = bool(live_mode)
+        self._baseline_allowlist_root = Path(baseline_allowlist_root) if baseline_allowlist_root else None
+        self._allowlist_metadata: Dict[str, str] | None = None
         self._load_spec()
         self._validate_promotion()
         self._initialize_policy()
@@ -101,6 +114,7 @@ class ShadowEngine:
         if self._execution_controller and state.halted:
             raise RuntimeError(f"Execution halted previously: {state.halt_reason or 'HALTED'}")
         as_of = self._calendar[state.current_step]
+        step_identity = self._derive_step_identity(as_of)
         snapshot = self.data_source.snapshot(as_of)
         prices = self._extract_prices(snapshot)
         portfolio_value = valuate_portfolio(state.cash, state.holdings, prices)
@@ -126,6 +140,7 @@ class ShadowEngine:
             state.halted = False
             state.halt_reason = None
         else:
+            resume_snapshot = StateStore.resume_snapshot(state)
             result = self._execution_controller.process_step(
                 as_of=as_of.isoformat(),
                 step_index=state.current_step,
@@ -138,9 +153,10 @@ class ShadowEngine:
                 day_start_value=day_start_value,
                 peak_value=state.peak_portfolio_value,
                 regime_bucket=self._regime_bucket_for_step(state.current_step),
+                resume_snapshot=resume_snapshot,
             )
             update = result.update
-            execution_details = self._summarize_execution(result)
+            execution_details = self._summarize_execution(result, step_identity=step_identity)
             self._update_state_from_execution(state, result, as_of)
         diag = constraint_diagnostics(update.weights, prev_weights, self._spec.risk_config)
         state.cash = update.cash
@@ -166,6 +182,8 @@ class ShadowEngine:
             diagnostics=diag,
             target_weights=target_weight_map,
             execution=execution_details,
+            step_identity=step_identity,
+            state=state,
         )
         self.logger.append(record)
         self.state_store.save(state)
@@ -193,6 +211,9 @@ class ShadowEngine:
             "state_path": str(self.state_store.state_path),
             "log_path": str(self.logger.steps_path),
         }
+        summary["unpromoted_execution_allowed"] = state.unpromoted_execution_allowed
+        summary["unpromoted_execution_reason"] = state.unpromoted_execution_reason
+        summary["baseline_allowlist_path"] = state.baseline_allowlist_path
         metrics_path = self._write_execution_metrics()
         if metrics_path is not None:
             summary["execution_metrics_path"] = str(metrics_path)
@@ -205,8 +226,29 @@ class ShadowEngine:
         self._spec = spec
 
     def _validate_promotion(self) -> None:
-        if not is_experiment_promoted(self.experiment_id, promotion_root=self._promotion_root):
-            raise RuntimeError(f"Experiment '{self.experiment_id}' is not promoted; shadow execution is disabled.")
+        self._allowlist_metadata = None
+        promoted = is_experiment_promoted(self.experiment_id, promotion_root=self._promotion_root)
+        if promoted:
+            return
+        allow_entry = baseline_allowlist.load_entry(
+            self.experiment_id,
+            root=self._baseline_allowlist_root,
+        )
+        if (
+            allow_entry is not None
+            and self._replay_mode
+            and not self._live_mode
+        ):
+            self._allowlist_metadata = {
+                "path": str(allow_entry.path),
+                "reason": "baseline_allowlist",
+            }
+            return
+        if allow_entry is not None and not self._replay_mode:
+            raise RuntimeError(
+                "Baseline allowlist only permits replay-mode execution; live execution remains disabled."
+            )
+        raise RuntimeError(f"Experiment '{self.experiment_id}' is not promoted; shadow execution is disabled.")
 
     def _ensure_state(self) -> ShadowState:
         if self._state is not None:
@@ -222,6 +264,10 @@ class ShadowEngine:
                 initial_cash=DEFAULT_INITIAL_CASH,
             )
         self._validate_state(state)
+        if self._allowlist_metadata:
+            state.unpromoted_execution_allowed = True
+            state.unpromoted_execution_reason = self._allowlist_metadata.get("reason")
+            state.baseline_allowlist_path = self._allowlist_metadata.get("path")
         self._state = state
         return state
 
@@ -321,6 +367,8 @@ class ShadowEngine:
         self._execution_metrics = ExecutionMetricsRecorder()
         order_config = self._build_order_config()
         risk_config = self._build_execution_risk_config()
+        controller_kwargs: dict[str, object] = {}
+        controller_class = ExecutionController
         if mode == "sim":
             sim_payload = self._execution_options.get("sim_broker") or {}
             broker = SimBrokerAdapter(
@@ -340,16 +388,25 @@ class ShadowEngine:
                     base_url=str(alpaca_payload.get("base_url", "https://paper-api.alpaca.markets")),
                 )
             broker = AlpacaBrokerAdapter(config=broker_config)
+            controller_class = PaperExecutionController
+            recon_cfg = ReconciliationConfig.from_mapping(self._execution_options.get("reconciliation"))
+            polling_cfg = PollingConfig.from_mapping(self._execution_options.get("polling"))
+            controller_kwargs = {
+                "reconciler": PaperReconciler(recon_cfg),
+                "polling": polling_cfg,
+                "gate_runner": ExecutionGateRunner(),
+            }
         controller_config = ExecutionControllerConfig(
             run_id=self.run_id,
             symbol_order=self._symbol_order,
             order_config=order_config,
             risk_config=risk_config,
         )
-        self._execution_controller = ExecutionController(
+        self._execution_controller = controller_class(
             broker=broker,
             metrics=self._execution_metrics,
             config=controller_config,
+            **controller_kwargs,
         )
         self._execution_broker = broker
         self._execution_metrics_path = self.out_dir / "execution_metrics.json"
@@ -408,10 +465,13 @@ class ShadowEngine:
         diagnostics: Mapping[str, float],
         target_weights: Mapping[str, float],
         execution: Mapping[str, Any],
+        step_identity: str | None = None,
+        state: ShadowState,
     ) -> Dict[str, Any]:
         return {
             "step": int(step_index),
             "as_of": snapshot["as_of"].isoformat(),
+            "step_identity": step_identity,
             "symbols": list(self._symbol_order),
             "raw_action": [float(value) for value in raw_action],
             "weights": [float(value) for value in update.weights],
@@ -424,7 +484,21 @@ class ShadowEngine:
             "constraint_diagnostics": {key: float(diagnostics[key]) for key in sorted(diagnostics)},
             "target_weights": {symbol: float(target_weights.get(symbol, 0.0)) for symbol in self._symbol_order},
             "execution": dict(execution),
+            "unpromoted_execution_allowed": state.unpromoted_execution_allowed,
+            "unpromoted_execution_reason": state.unpromoted_execution_reason,
+            "baseline_allowlist_path": state.baseline_allowlist_path,
         }
+
+    def _derive_step_identity(self, as_of: Any) -> str:
+        timestamp = as_of.isoformat() if hasattr(as_of, "isoformat") else str(as_of)
+        payload = {
+            "experiment_id": self.experiment_id,
+            "timestamp": timestamp,
+            "universe": list(self._symbol_order),
+            "execution_mode": self._execution_mode,
+        }
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+        return digest[:16]
 
     def _empty_execution_log(self) -> dict[str, Any]:
         return {
@@ -438,9 +512,15 @@ class ShadowEngine:
             "broker_errors": [],
             "halted": False,
             "halt_reason": None,
+            "account_snapshot": None,
+            "position_snapshots": [],
+            "gate_report": {},
+            "step_identity": None,
         }
 
-    def _summarize_execution(self, result: "ExecutionStepResult") -> dict[str, Any]:
+    def _summarize_execution(self, result: "ExecutionStepResult", *, step_identity: str | None = None) -> dict[str, Any]:
+        account_snapshot = _account_snapshot_to_dict(result.account_snapshot)
+        position_snapshots = [_position_snapshot_to_dict(entry) for entry in (result.position_snapshots or [])]
         return {
             "mode": self._execution_mode,
             "orders_compiled": [order.to_dict() for order in result.compiled_orders],
@@ -452,17 +532,29 @@ class ShadowEngine:
             "broker_errors": list(result.broker_errors),
             "halted": result.halted,
             "halt_reason": result.halt_reason,
+            "account_snapshot": account_snapshot,
+            "position_snapshots": position_snapshots,
+            "gate_report": dict(result.gate_report or {}),
+            "step_identity": step_identity,
         }
 
     def _update_state_from_execution(self, state: ShadowState, result: "ExecutionStepResult", as_of: Any) -> None:
         state.open_orders = [order.to_dict() for order in result.open_orders]
-        state.last_broker_sync = as_of.isoformat()
+        if result.account_snapshot and getattr(result.account_snapshot, "as_of", None):
+            state.last_broker_sync = result.account_snapshot.as_of
+        else:
+            state.last_broker_sync = as_of.isoformat()
         state.halted = bool(result.halted)
         state.halt_reason = result.halt_reason
         existing = set(state.submitted_order_ids)
         for order in result.orders_submitted:
             existing.add(order.client_order_id)
         state.submitted_order_ids = sorted(existing)
+        if result.client_broker_map:
+            merged = dict(state.broker_order_map)
+            merged.update(result.client_broker_map)
+            state.broker_order_map = merged
+        state.last_completed_step_ts = as_of.isoformat()
 
     def _resolve_symbol_order(self) -> tuple[str, ...]:
         if hasattr(self.data_source, "symbol_order"):
@@ -559,6 +651,28 @@ class ShadowEngine:
 
 def _override(value: float | int | None, fallback: float | int | None) -> float | int | None:
     return value if value is not None else fallback
+
+
+def _account_snapshot_to_dict(snapshot: Any) -> dict[str, Any] | None:
+    if snapshot is None:
+        return None
+    return {
+        "as_of": getattr(snapshot, "as_of", None),
+        "equity": float(getattr(snapshot, "equity", 0.0)),
+        "cash": float(getattr(snapshot, "cash", 0.0)),
+        "buying_power": float(getattr(snapshot, "buying_power", 0.0)) if getattr(snapshot, "buying_power", None) is not None else None,
+        "currency": getattr(snapshot, "currency", "USD"),
+    }
+
+
+def _position_snapshot_to_dict(snapshot: Any) -> dict[str, Any]:
+    return {
+        "symbol": getattr(snapshot, "symbol", None),
+        "qty": float(getattr(snapshot, "qty", 0.0)),
+        "avg_price": float(getattr(snapshot, "avg_price", 0.0)),
+        "market_price": float(getattr(snapshot, "market_price", 0.0)),
+        "market_value": float(getattr(snapshot, "market_value", 0.0)),
+    }
 
 
 def _bucket_label(value: float, q33: float, q66: float) -> str:

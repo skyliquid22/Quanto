@@ -108,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         destination=run_dir if args.output_dir else None,
     )
     logger = ShadowLogger(run_dir)
+    baseline_allow_root = data_root / "baseline_allowlist"
     engine = ShadowEngine(
         experiment_id=args.experiment_id,
         data_source=data_source,
@@ -117,6 +118,9 @@ def main(argv: list[str] | None = None) -> int:
         out_dir=run_dir,
         registry=registry,
         promotion_root=promotion_root,
+        replay_mode=True,
+        live_mode=False,
+        baseline_allowlist_root=baseline_allow_root,
     )
     summary = engine.run(max_steps=max_steps)
     print(  # noqa: T201 - CLI status

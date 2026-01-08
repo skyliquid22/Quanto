@@ -120,7 +120,21 @@ def main(argv: list[str] | None = None) -> int:
         f"Qualification FAILED for {result.report.experiment_id}. Reasons: "
         f"{result.report.failed_hard}. Report: {result.report_path}"
     )
-    _print_execution_resolution(result.report.execution_metrics_resolution)
+    res = result.report.execution_metrics_resolution
+    if res:
+        print("\nExecution metrics resolution:")
+        for side, info in res.items():
+            print(f"  {side}:")
+            for k, v in info.items():
+                if k == "attempted":
+                    print(f"    attempted_paths:")
+                    for p in v[:5]:
+                        print(f"      - {p}")
+                    if len(v) > 5:
+                        print(f"      ... ({len(v) - 5} more)")
+                else:
+                    print(f"    {k}: {v}")
+
     if result.report.failed_soft:
         print(  # noqa: T201 - CLI feedback
             f"Soft warnings: {result.report.failed_soft}"
@@ -147,3 +161,12 @@ def _print_execution_resolution(resolution: Mapping[str, Any] | None) -> None:
             print(  # noqa: T201 - CLI feedback
                 f"{label.title()} execution metrics missing. Attempted paths: {preview}"
             )
+        if label == "baseline":
+            exp_id = entry.get("experiment_id")
+            if exp_id:
+                print(  # noqa: T201 - CLI feedback
+                    "Hint: if this baseline is unpromoted, allow a replay via:"
+                )
+                print(  # noqa: T201
+                    f"  python scripts/baseline_allowlist.py --add {exp_id} --reason \"baseline execution metrics\""
+                )
