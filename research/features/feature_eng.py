@@ -43,6 +43,21 @@ def build_sma_feature_result(
     if len(timestamps) != len(closes) or len(timestamps) < 2:
         raise ValueError("slice_data must provide at least two aligned timestamps and close prices")
 
+    normalized_feature_set = normalize_feature_set_name(feature_set)
+    if normalized_feature_set == "core_v1":
+        equity_df = slice_data.frame.reset_index()
+        equity_df.rename(columns={"index": "timestamp"}, inplace=True)
+        start = start_date or timestamps[0].date()
+        end = end_date or timestamps[-1].date()
+        return build_features(
+            "core_v1",
+            equity_df,
+            underlying_symbol=slice_data.symbol,
+            start_date=start,
+            end_date=end,
+            data_root=data_root,
+        )
+
     config = SMAStrategyConfig(fast_window=fast_window, slow_window=slow_window)
     strategy = run_sma_crossover(slice_data.symbol, timestamps, closes, config)
     frame = strategy_to_feature_frame(strategy)
