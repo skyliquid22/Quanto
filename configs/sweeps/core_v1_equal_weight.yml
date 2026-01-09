@@ -1,0 +1,29 @@
+sweep_name: core_v1_equal_weight
+base_experiment_spec:
+  experiment_name: core_v1_equal_weight
+  symbols: [
+      "AAPL", "MSFT", "NVDA", "AVGO", "ORCL",
+      "ADBE", "CRM", "AMD", "CSCO", "QCOM",
+      "TXN", "ACN", "INTC", "IBM", "NOW",
+      "AMAT", "PANW", "INTU", "ADP", "MU"
+  ]
+  start_date: "2023-01-01"
+  end_date: "2023-06-30"
+  interval: "daily"
+  feature_set: "core_v1"
+  policy: "equal_weight"
+  policy_params: {}
+  cost_config:
+    transaction_cost_bp: 1.0
+  risk_config:
+    long_only: true
+    max_weight: 0.6
+    exposure_cap: 1.0
+    min_cash: 0.0
+    max_turnover_1d: 0.4
+  seed: 42
+  notes: "core_v1 vs core_v1_regime (equal weight)"
+sweep_dimensions:
+  feature_set:
+    - "core_v1"
+    - "core_v1_regime"
