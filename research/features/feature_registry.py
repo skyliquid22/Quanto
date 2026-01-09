@@ -68,9 +68,16 @@ _UNIVERSE_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "sma_plus_xsec_v1": SMA_PLUS_XSEC_OBSERVATION_COLUMNS,
     "sma_plus_regime_v1": SMA_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
     "xsec_plus_regime_v1": EQUITY_XSEC_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
+    "core_v1_regime": CORE_V1_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
 }
 _REGIME_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "regime_v1": REGIME_FEATURE_COLUMNS,
+}
+
+_FEATURE_SET_DEFAULT_REGIME: Dict[str, str] = {
+    "sma_plus_regime_v1": "regime_v1",
+    "xsec_plus_regime_v1": "regime_v1",
+    "core_v1_regime": "regime_v1",
 }
 
 
@@ -165,6 +172,13 @@ def is_regime_feature_set(regime_feature_set: str | None) -> bool:
         return False
     normalized = normalize_feature_set_name(regime_feature_set)
     return normalized in _REGIME_FEATURE_OBSERVATION_COLUMNS
+
+
+def default_regime_for_feature_set(feature_set: str) -> str | None:
+    if not feature_set:
+        return None
+    normalized = normalize_feature_set_name(feature_set)
+    return _FEATURE_SET_DEFAULT_REGIME.get(normalized)
 
 
 def is_universe_feature_set(feature_set: str) -> bool:
@@ -415,5 +429,6 @@ __all__ = [
     "normalize_regime_feature_set_name",
     "is_universe_feature_set",
     "is_regime_feature_set",
+    "default_regime_for_feature_set",
     "observation_columns_for_feature_set",
 ]

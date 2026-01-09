@@ -23,6 +23,7 @@ from research.experiments.sweep import SweepSpec, expand_sweep_entries
 from research.features.feature_eng import build_sma_feature_result, build_universe_feature_results
 from research.features.feature_registry import (
     build_universe_feature_panel,
+    default_regime_for_feature_set,
     is_universe_feature_set,
     normalize_feature_set_name,
 )
@@ -473,12 +474,13 @@ def _build_hierarchical_rows(
         for key, value in result.inputs_used.items():
             feature_hashes[f"{symbol}:{key}"] = value
     calendar = build_union_calendar(slices, start_date=spec.start_date, end_date=spec.end_date)
+    regime_for_panel = spec.regime_feature_set or default_regime_for_feature_set(normalized_feature_set)
     panel = build_universe_feature_panel(
         per_symbol_features,
         symbol_order=symbols,
         calendar=calendar,
         forward_fill_limit=3,
-        regime_feature_set=spec.regime_feature_set,
+        regime_feature_set=regime_for_panel,
     )
     return panel.rows, panel.observation_columns, feature_hashes, feature_set_name, sma_config
 

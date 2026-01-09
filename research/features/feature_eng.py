@@ -77,7 +77,7 @@ def build_universe_feature_results(
     order = tuple(dict.fromkeys(symbol_order or sorted(slices.keys())))
     if len(order) < 2:
         raise ValueError("Universe feature sets require at least two symbols")
-    if normalized not in {"equity_xsec_v1", "sma_plus_xsec_v1"}:
+    if normalized not in {"equity_xsec_v1", "sma_plus_xsec_v1", "core_v1_regime"}:
         raise ValueError(f"Unsupported universe feature set '{feature_set}'")
 
     frames = build_equity_xsec_feature_frames(
@@ -98,6 +98,31 @@ def build_universe_feature_results(
                 observation_columns=EQUITY_XSEC_OBSERVATION_COLUMNS,
                 feature_set="equity_xsec_v1",
                 inputs_used={},
+            )
+        return results
+
+    if sma_config is None and normalized == "sma_plus_xsec_v1":
+        raise ValueError("sma_config is required for sma_plus_xsec_v1 features")
+    if normalized == "core_v1_regime":
+        results: Dict[str, FeatureSetResult] = {}
+        for symbol in order:
+            slice_data = slices.get(symbol)
+            if slice_data is None:
+                raise ValueError(f"Missing canonical slice for symbol {symbol}")
+            equity_df = slice_data.frame.reset_index()
+            feature_result = build_features(
+                "core_v1",
+                equity_df,
+                underlying_symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                data_root=data_root,
+            )
+            results[symbol] = FeatureSetResult(
+                frame=feature_result.frame,
+                observation_columns=feature_result.observation_columns,
+                feature_set="core_v1_regime",
+                inputs_used=feature_result.inputs_used,
             )
         return results
 

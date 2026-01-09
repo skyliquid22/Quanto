@@ -30,6 +30,7 @@ from research.features.feature_registry import (
     FeatureSetResult,
     build_features,
     build_universe_feature_panel,
+    default_regime_for_feature_set,
     is_universe_feature_set,
     normalize_feature_set_name,
     strategy_to_feature_frame,
@@ -165,7 +166,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sigmoid-scale", type=float, default=5.0, help="Scale factor for sigmoid mode.")
     parser.add_argument(
         "--feature-set",
-        choices=["sma_v1", "sma_universe_v1", "options_v1", "sma_plus_options_v1", "equity_xsec_v1", "sma_plus_xsec_v1"],
+        choices=[
+            "sma_v1",
+            "sma_universe_v1",
+            "options_v1",
+            "sma_plus_options_v1",
+            "equity_xsec_v1",
+            "sma_plus_xsec_v1",
+            "core_v1_regime",
+        ],
         default="sma_v1",
         help="Feature set used for environment observations.",
     )
@@ -616,6 +625,7 @@ def main() -> int:
     feature_set_name: str | None = None
     multi_symbol = len(symbols) > 1
     normalized_feature_set = normalize_feature_set_name(args.feature_set)
+    panel_regime_feature = default_regime_for_feature_set(normalized_feature_set)
     if not multi_symbol and is_universe_feature_set(normalized_feature_set):
         raise SystemExit(f"Feature set '{args.feature_set}' requires at least two symbols (--symbols)")
     if multi_symbol and is_universe_feature_set(normalized_feature_set):
@@ -666,6 +676,7 @@ def main() -> int:
             symbol_order=symbols,
             calendar=calendar,
             forward_fill_limit=3,
+            regime_feature_set=panel_regime_feature,
         )
         rows = panel.rows
         base_observation_columns = panel.observation_columns

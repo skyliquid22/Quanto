@@ -32,6 +32,7 @@ from research.features.feature_registry import (
     FeatureSetResult,
     build_features,
     build_universe_feature_panel,
+    default_regime_for_feature_set,
     is_universe_feature_set,
     normalize_feature_set_name,
     strategy_to_feature_frame,
@@ -356,6 +357,7 @@ def _build_feature_rows(
     feature_hashes: Dict[str, str] = {}
     normalized_feature_set = normalize_feature_set_name(args.feature_set)
     multi_symbol = len(symbols) > 1
+    panel_regime_feature = default_regime_for_feature_set(normalized_feature_set)
     if not multi_symbol and is_universe_feature_set(normalized_feature_set):
         raise SystemExit(f"Feature set '{args.feature_set}' requires multi-symbol mode.")
     if multi_symbol and is_universe_feature_set(normalized_feature_set):
@@ -402,6 +404,7 @@ def _build_feature_rows(
             symbol_order=symbols,
             calendar=calendar,
             forward_fill_limit=3,
+            regime_feature_set=panel_regime_feature,
         )
         rows = panel.rows
         base_columns = panel.observation_columns

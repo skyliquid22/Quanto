@@ -12,7 +12,13 @@ from infra.paths import get_data_root
 from research.datasets.canonical_equity_loader import build_union_calendar, load_canonical_equity
 from research.experiments.spec import ExperimentSpec
 from research.features.feature_eng import build_sma_feature_result, build_universe_feature_results
-from research.features.feature_registry import FeatureSetResult, build_universe_feature_panel, normalize_feature_set_name
+from research.features.feature_registry import (
+    FeatureSetResult,
+    build_universe_feature_panel,
+    default_regime_for_feature_set,
+    is_universe_feature_set,
+    normalize_feature_set_name,
+)
 from research.strategies.sma_crossover import SMAStrategyConfig
 
 
@@ -99,12 +105,14 @@ class ReplayMarketDataSource(MarketDataSource):
         )
         feature_results = self._build_feature_results(slices)
         calendar = build_union_calendar(slices, start_date=self._start_date, end_date=self._end_date)
+        normalized_feature_set = normalize_feature_set_name(self._spec.feature_set)
+        regime_for_panel = self._spec.regime_feature_set or default_regime_for_feature_set(normalized_feature_set)
         panel = build_universe_feature_panel(
             feature_results,
             symbol_order=self._spec.symbols,
             calendar=calendar,
             forward_fill_limit=3,
-            regime_feature_set=self._spec.regime_feature_set,
+            regime_feature_set=regime_for_panel,
         )
         self._symbol_order = tuple(panel.symbol_order)
         self._observation_columns = tuple(panel.observation_columns)
@@ -150,7 +158,7 @@ class ReplayMarketDataSource(MarketDataSource):
         windows = _resolve_sma_config(spec)
         start = self._start_date
         end = self._end_date
-        if len(spec.symbols) > 1 and normalized_feature_set in {"equity_xsec_v1", "sma_plus_xsec_v1"}:
+        if len(spec.symbols) > 1 and is_universe_feature_set(normalized_feature_set):
             return build_universe_feature_results(
                 normalized_feature_set,
                 slices,
