@@ -12,6 +12,9 @@ import time
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
+from types import SimpleNamespace
+
+import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,9 +28,9 @@ from research.envs.signal_weight_env import SignalWeightEnvConfig
 from research.features.feature_eng import build_universe_feature_results
 from research.features.feature_registry import (
     FeatureSetResult,
-    build_features,
     build_universe_feature_panel,
     default_regime_for_feature_set,
+    build_features,
     is_universe_feature_set,
     normalize_feature_set_name,
     strategy_to_feature_frame,
@@ -140,6 +143,104 @@ def _resolve_symbol_list(symbol: str, symbols_arg: Sequence[str] | None) -> List
     return [clean]
 
 
+def _ensure_canonical_slice(slice_data: Any, symbol: str):
+    """Normalize canonical slice payloads for compatibility with older tests."""
+
+    has_frame = hasattr(slice_data, "frame")
+    has_timestamps = hasattr(slice_data, "timestamps")
+    has_closes = hasattr(slice_data, "closes")
+    if has_frame and has_timestamps and has_closes:
+        # Ensure downstream code can rely on .symbol even for legacy slices.
+        if getattr(slice_data, "symbol", None):
+            return slice_data
+        return SimpleNamespace(
+            frame=slice_data.frame,
+            timestamps=slice_data.timestamps,
+            closes=slice_data.closes,
+            symbol=getattr(slice_data, "symbol", symbol),
+            rows=getattr(slice_data, "rows", None),
+        )
+
+    rows = getattr(slice_data, "rows", None)
+    if rows is None:
+        raise SystemExit("Canonical slice is missing 'frame' and 'rows' payloads.")
+    frame = getattr(slice_data, "frame", None)
+    if frame is None:
+        frame = pd.DataFrame(rows)
+    timestamps = getattr(slice_data, "timestamps", None)
+    if timestamps is None:
+        timestamps = [row.get("timestamp") for row in rows if "timestamp" in row]
+    closes = getattr(slice_data, "closes", None)
+    if closes is None:
+        closes = [row.get("close") for row in rows if "close" in row]
+    if not timestamps or not closes:
+        raise SystemExit("Canonical slice must include timestamps and close prices.")
+    return SimpleNamespace(
+        frame=frame,
+        timestamps=timestamps,
+        closes=closes,
+        symbol=getattr(slice_data, "symbol", symbol),
+        rows=rows,
+    )
+
+
+def _build_single_symbol_feature_result(
+    slice_data: Any,
+    *,
+    fast_window: int,
+    slow_window: int,
+    feature_set: str,
+    start_date: date,
+    end_date: date,
+    data_root: Path,
+) -> FeatureSetResult:
+    """Local SMA feature builder to keep trainer tests lightweight."""
+
+    if fast_window <= 0 or slow_window <= 0:
+        raise SystemExit("SMA windows must be positive.")
+    if fast_window >= slow_window:
+        raise SystemExit("fast-window must be strictly less than slow-window.")
+
+    frame = getattr(slice_data, "frame", None)
+    if frame is None or frame.empty:
+        raise SystemExit("Canonical slice must contain at least two rows.")
+    timestamps = getattr(slice_data, "timestamps", None)
+    closes = getattr(slice_data, "closes", None)
+    if not timestamps or not closes or len(timestamps) != len(closes):
+        raise SystemExit("Canonical slice must include aligned timestamps and closes.")
+    if len(timestamps) < 2:
+        raise SystemExit("At least two bars are required to build SMA features.")
+
+    normalized_feature_set = normalize_feature_set_name(feature_set)
+    if normalized_feature_set == "core_v1":
+        equity_df = frame.reset_index(drop=False)
+        if "index" in equity_df.columns:
+            equity_df.rename(columns={"index": "timestamp"}, inplace=True)
+        return build_features(
+            "core_v1",
+            equity_df,
+            underlying_symbol=getattr(slice_data, "symbol", "UNKNOWN"),
+            start_date=start_date,
+            end_date=end_date,
+            data_root=data_root,
+        )
+
+    sma_config = SMAStrategyConfig(fast_window=fast_window, slow_window=slow_window)
+    strategy = run_sma_crossover(getattr(slice_data, "symbol", "UNKNOWN"), timestamps, closes, sma_config)
+    strategy_frame = strategy_to_feature_frame(strategy)
+    if len(strategy_frame) < 2:
+        raise SystemExit("Not enough SMA-aligned rows to build features.")
+
+    return build_features(
+        feature_set,
+        strategy_frame,
+        underlying_symbol=getattr(slice_data, "symbol", "UNKNOWN"),
+        start_date=start_date,
+        end_date=end_date,
+        data_root=data_root,
+    )
+
+
 def _build_risk_config(args: argparse.Namespace) -> RiskConfig:
     return RiskConfig(
         long_only=not bool(getattr(args, "allow_short", False)),
@@ -220,7 +321,11 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
     slices, canonical_hashes = load_canonical_equity(symbols, start, end, data_root=data_root, interval=interval)
     for symbol in symbols:
         slice_data = slices.get(symbol)
-        if not slice_data or not slice_data.rows:
+        if not slice_data:
+            raise SystemExit(f"No canonical data found for symbol {symbol}")
+        rows = getattr(slice_data, "rows", None)
+        frame = getattr(slice_data, "frame", None)
+        if not rows and (frame is None or frame.empty):
             raise SystemExit(f"No canonical data found for symbol {symbol}")
 
     sma_config = SMAStrategyConfig(fast_window=args.fast_window, slow_window=args.slow_window)
@@ -244,15 +349,12 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         )
     else:
         for symbol in symbols:
-            slice_data = slices[symbol]
-            strategy = run_sma_crossover(symbol, slice_data.timestamps, slice_data.closes, sma_config)
-            strategy_frame = strategy_to_feature_frame(strategy)
-            if len(strategy_frame) < 2:
-                raise SystemExit("Not enough rows after SMA alignment to train PPO.")
-            feature_result = build_features(
-                args.feature_set,
-                strategy_frame,
-                underlying_symbol=symbol,
+            slice_data = _ensure_canonical_slice(slices[symbol], symbol)
+            feature_result = _build_single_symbol_feature_result(
+                slice_data,
+                fast_window=sma_config.fast_window,
+                slow_window=sma_config.slow_window,
+                feature_set=args.feature_set,
                 start_date=start,
                 end_date=end,
                 data_root=data_root,
