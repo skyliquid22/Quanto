@@ -901,6 +901,7 @@ class ReconciliationBuilder:
                     continue
                 manifest_dir = vendor_dir / domain / "manifests"
                 candidate_dirs.append(manifest_dir)
+                candidate_dirs.append(manifest_dir / "validation")
         for directory in candidate_dirs:
             if not directory.exists():
                 continue

@@ -7,6 +7,8 @@ __pycache__/
 .venv
 venv/
 .quanto_data/
+.quanto_data/raw/*
+.quanto_data/canonical/*
 data/raw/
 data/processed/
 data/features/

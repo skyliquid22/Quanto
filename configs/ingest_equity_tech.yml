@@ -1,0 +1,10 @@
+symbols: [
+    "AAPL", "MSFT", "NVDA", "AVGO", "ORCL",
+    "ADBE", "CRM", "AMD", "CSCO", "QCOM",
+    "TXN", "ACN", "INTC", "IBM", "NOW",
+    "AMAT", "PANW", "INTU", "ADP", "MU"
+]
+start_date: "2022-01-01"
+end_date: "2026-01-01"
+interval: "daily"
+vendor: "polygon"
