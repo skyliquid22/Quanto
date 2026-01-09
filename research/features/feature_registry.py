@@ -25,6 +25,8 @@ from research.features.options_features_v1 import OPTION_FEATURE_COLUMNS, comput
 from research.features.regime_features_v1 import REGIME_FEATURE_COLUMNS, compute_regime_features
 from research.regime import RegimeState
 from research.strategies.sma_crossover import SMAStrategyResult
+from research.features.core_features_v1 import CORE_V1_OBSERVATION_COLUMNS, compute_core_features_v1
+
 
 SMA_OBSERVATION_COLUMNS = ("close", "sma_fast", "sma_slow", "sma_diff", "sma_signal")
 OPTIONS_OBSERVATION_COLUMNS = ("close",) + OPTION_FEATURE_COLUMNS
@@ -212,6 +214,11 @@ def _options_only_builder(equity_df: "pd.DataFrame", options: CanonicalOptionDat
     return merged
 
 
+def _core_v1_builder(equity_df: "pd.DataFrame", _: CanonicalOptionData | None) -> "pd.DataFrame":
+    return compute_core_features_v1(equity_df)
+
+
+
 def _load_options_payload(
     symbol: str,
     start: date | str,
@@ -384,6 +391,13 @@ _FEATURE_REGISTRY: Dict[str, _FeatureSetSpec] = {
         requires_options=True,
         builder=_options_only_builder,
     ),
+    "core_v1": _FeatureSetSpec(
+        name="core_v1",
+        observation_columns=CORE_V1_OBSERVATION_COLUMNS,
+        requires_options=False,
+        builder=_core_v1_builder,
+    ),
+
 }
 
 
