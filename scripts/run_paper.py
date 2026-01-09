@@ -21,6 +21,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare and launch Alpaca paper validation runs.")
     parser.add_argument("--config", required=True, help="Path to a paper run config (json or yaml).")
     parser.add_argument("--promotion-root", help="Optional override for promotion records.")
+    parser.add_argument("--run-id", help="Optional override for the derived run identifier.")
     return parser.parse_args(argv)
 
 
@@ -39,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     if not _credentials_available():
         print("ALPACA_API_KEY and ALPACA_SECRET_KEY must be configured for paper runs.", file=sys.stderr)  # noqa: T201
         return 4
-    runner = PaperRunner(config)
+    runner = PaperRunner(config, run_id=args.run_id)
     print(f"Paper run prepared at {runner.run_dir}")  # noqa: T201
     return 0
 

@@ -30,6 +30,7 @@ def _write_experiment(
     (base / "spec" / "experiment_spec.json").write_text(json.dumps(spec_payload), encoding="utf-8")
     metrics_payload = {
         "metadata": {"run_id": experiment_id},
+        "returns": [0.01, -0.02, 0.03],
         "performance": {
             "total_return": 0.12,
             "cagr": None,
@@ -41,12 +42,15 @@ def _write_experiment(
         "trading": {
             "turnover_1d_mean": turnover,
             "turnover_1d_median": turnover,
+             "turnover_1d_std": turnover,
+             "turnover_1d_p95": turnover,
             "avg_exposure": 1.0,
             "max_concentration": 0.5,
             "hhi_mean": 0.3,
             "tx_cost_total": 5.0,
             "tx_cost_bps": 10.0,
             "avg_cash": 0.1,
+            "cost_sensitivity_curve": {"0.5": 0.01, "1.0": 0.005, "1.5": 0.0},
         },
         "safety": {
             "nan_inf_violations": 0.0,
@@ -55,6 +59,13 @@ def _write_experiment(
             "max_weight_violation_count": 0.0,
             "exposure_violation_count": 0.0,
             "turnover_violation_count": 0.0,
+        },
+        "stability": {
+            "turnover_std": turnover,
+            "turnover_p95": turnover,
+            "mode_churn_rate": 0.0,
+            "mode_set_size": 1.0,
+            "cost_curve_span": 0.0,
         },
     }
     metrics_payload["performance_by_regime"] = performance_by_regime or _regime_performance_payload(max_drawdown)
@@ -204,6 +215,30 @@ def test_execution_metrics_malformed(tmp_path: Path):
         registry=registry,
     )
     assert any(reason.startswith("missing_execution_metric:execution.summary.fill_rate") for reason in evaluation.failed_hard)
+
+
+def test_sharpe_soft_gate_triggered(tmp_path: Path):
+    registry = ExperimentRegistry(root=tmp_path)
+    _write_experiment(tmp_path, "baseline", sharpe=1.0, max_drawdown=0.05, turnover=0.05)
+    _write_experiment(tmp_path, "candidate", sharpe=0.8, max_drawdown=0.04, turnover=0.03)
+    evaluation = QualificationCriteria(max_drawdown=0.5, max_turnover=0.5).evaluate(
+        registry.get("candidate"),
+        registry.get("baseline"),
+        registry=registry,
+    )
+    assert any(reason.startswith("soft_gate:sharpe_not_improved") for reason in evaluation.failed_soft)
+
+
+def test_stability_regression_flagged(tmp_path: Path):
+    registry = ExperimentRegistry(root=tmp_path)
+    _write_experiment(tmp_path, "baseline", sharpe=1.0, max_drawdown=0.05, turnover=0.05)
+    _write_experiment(tmp_path, "candidate", sharpe=1.1, max_drawdown=0.04, turnover=0.5)
+    evaluation = QualificationCriteria(max_drawdown=0.5, max_turnover=0.6).evaluate(
+        registry.get("candidate"),
+        registry.get("baseline"),
+        registry=registry,
+    )
+    assert any(reason.startswith("stability_regressed") for reason in evaluation.failed_soft)
 
 
 def test_execution_reject_rate_gate(tmp_path: Path):

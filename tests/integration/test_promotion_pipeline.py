@@ -35,6 +35,8 @@ def _write_experiment(
         "trading": {
             "turnover_1d_mean": turnover,
             "turnover_1d_median": turnover,
+            "turnover_1d_std": turnover / 2,
+            "turnover_1d_p95": turnover,
             "avg_exposure": 1.0,
             "max_concentration": 0.4,
             "hhi_mean": 0.3,
@@ -43,6 +45,12 @@ def _write_experiment(
             "avg_cash": 0.1,
             "mode_counts": {},
             "mode_transitions": {},
+        },
+        "stability": {
+            "turnover_std": 0.01,
+            "mode_churn_rate": 0.0,
+            "mode_set_size": 1.0,
+            "cost_curve_span": 0.0,
         },
         "safety": {
             "nan_inf_violations": 0.0,
@@ -98,6 +106,7 @@ def _write_experiment(
                 "low_vol": {"avg_slippage_bps": 1.0, "p95_slippage_bps": 2.0, "reject_rate": 0.001, "fill_rate": 0.999},
             },
         },
+        "returns": [0.0, 0.01, 0.0],
     }
     (base / "evaluation" / "metrics.json").write_text(
         json.dumps(metrics_payload, sort_keys=True, indent=2),

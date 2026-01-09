@@ -1,0 +1,27 @@
+{
+  "artifacts": {
+    "output_root": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data_notebook_tmp/T27_T28_20260108_104247/paper/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/runs"
+  },
+  "broker": {
+    "alpaca_base_url": "https://paper-api.alpaca.markets"
+  },
+  "execution_mode": "alpaca_paper",
+  "experiment_id": "c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557",
+  "polling": {
+    "max_poll_seconds": 5,
+    "poll_interval_seconds": 1
+  },
+  "reconciliation": {
+    "cash_tolerance_usd": 10.0,
+    "position_tolerance_shares": 0.5
+  },
+  "risk_limits": {
+    "max_drawdown": 0.05,
+    "max_gross_exposure": 0.5,
+    "max_turnover": 0.1
+  },
+  "universe": [
+    "AAPL",
+    "MSFT"
+  ]
+}

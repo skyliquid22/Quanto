@@ -149,6 +149,7 @@ def test_aggregate_sweep(tmp_path: Path):
 
     configuration_counts = metrics_summary["configuration_counts"]
     assert configuration_counts[0]["sample_count"] == 1
+    assert set(metrics_summary["regime_summary"].keys()) == {"high_vol", "mid_vol", "low_vol"}
 
     assert regression_summary["passes"] == 1
     assert regression_summary["fails"] == 1

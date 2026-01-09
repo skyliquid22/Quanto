@@ -67,6 +67,7 @@ def _metrics_payload(
 ) -> dict:
     return {
         "metadata": {"run_id": "test"},
+        "returns": [0.01, -0.02, 0.03],
         "performance": {
             "total_return": 0.15,
             "cagr": None,
@@ -78,6 +79,8 @@ def _metrics_payload(
         "trading": {
             "turnover_1d_mean": 0.15,
             "turnover_1d_median": 0.14,
+            "turnover_1d_std": 0.12,
+            "turnover_1d_p95": 0.2,
             "avg_exposure": 0.9,
             "max_concentration": 0.5,
             "hhi_mean": 0.4,
@@ -86,6 +89,7 @@ def _metrics_payload(
             "avg_cash": 0.1,
             "mode_counts": {"risk_on": 40, "neutral": 40, "defensive": 20},
             "mode_transitions": {"risk_on->neutral": 4, "neutral->defensive": 4},
+            "cost_sensitivity_curve": {"0.5": 0.01, "1.0": 0.0, "1.5": -0.01},
         },
         "safety": {
             "nan_inf_violations": 0.0,
@@ -121,6 +125,13 @@ def _metrics_payload(
                 "avg_turnover": 0.07,
                 "sharpe": 1.2,
             },
+        },
+        "stability": {
+            "turnover_std": 0.12,
+            "turnover_p95": 0.2,
+            "mode_churn_rate": 0.1,
+            "mode_set_size": 3.0,
+            "cost_curve_span": 0.02,
         },
         "execution": {
             "summary": {

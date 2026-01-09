@@ -1,0 +1,502 @@
+{
+  "baseline_experiment_id": "0dec4f1989638e4dfa29a8ce324fa3b54d33a1a2e2d7b771bab0fa4afca1568e",
+  "candidate_experiment_id": "c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557",
+  "execution_metrics": {
+    "regime": {
+      "high_vol": {},
+      "low_vol": {},
+      "mid_vol": {}
+    },
+    "summary": {
+      "avg_slippage_bps": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "delta_pct": null
+      },
+      "execution_halts": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "delta_pct": null
+      },
+      "fill_rate": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "delta_pct": null
+      },
+      "p95_slippage_bps": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "delta_pct": null
+      },
+      "partial_fill_rate": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "delta_pct": null
+      },
+      "reject_rate": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "delta_pct": null
+      },
+      "total_fees": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "delta_pct": null
+      },
+      "turnover_realized": {
+        "baseline": null,
+        "candidate": null,
+        "delta": null,
+        "delta_pct": null
+      }
+    }
+  },
+  "metadata": {
+    "baseline": {
+      "end_date": "2023-06-30",
+      "experiment_id": "0dec4f1989638e4dfa29a8ce324fa3b54d33a1a2e2d7b771bab0fa4afca1568e",
+      "feature_set": "sma_v1",
+      "interval": "daily",
+      "policy_id": "equal_weight",
+      "run_id": "0dec4f1989638e4dfa29a8ce324fa3b54d33a1a2e2d7b771bab0fa4afca1568e",
+      "start_date": "2023-01-01",
+      "symbols": [
+        "AAPL",
+        "MSFT"
+      ]
+    },
+    "candidate": {
+      "end_date": "2023-06-30",
+      "experiment_id": "c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557",
+      "feature_set": "sma_v1",
+      "interval": "daily",
+      "policy_id": "equal_weight",
+      "run_id": "c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557",
+      "start_date": "2023-01-01",
+      "symbols": [
+        "AAPL",
+        "MSFT"
+      ]
+    }
+  },
+  "metrics": [
+    {
+      "baseline_value": 0.0820162585,
+      "candidate_value": 0.0822327267,
+      "category": "performance",
+      "delta": 0.0002164682,
+      "delta_pct": 0.263933,
+      "directionality": "higher_is_better",
+      "metric_id": "performance.total_return",
+      "name": "total_return",
+      "reason": null,
+      "status": "improved"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": null,
+      "category": "performance",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "higher_is_better",
+      "metric_id": "performance.cagr",
+      "name": "cagr",
+      "reason": "candidate_and_baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": 0.1890631349,
+      "candidate_value": 0.1895825428,
+      "category": "performance",
+      "delta": 0.0005194079,
+      "delta_pct": 0.274727,
+      "directionality": "neutral",
+      "metric_id": "performance.volatility_ann",
+      "name": "volatility_ann",
+      "reason": null,
+      "status": "improved"
+    },
+    {
+      "baseline_value": 8.8782496432,
+      "candidate_value": 8.8767355318,
+      "category": "performance",
+      "delta": -0.0015141114,
+      "delta_pct": -0.017054,
+      "directionality": "higher_is_better",
+      "metric_id": "performance.sharpe",
+      "name": "sharpe",
+      "reason": null,
+      "status": "regressed"
+    },
+    {
+      "baseline_value": 0.0176287855,
+      "candidate_value": 0.0176287855,
+      "category": "performance",
+      "delta": 0.0,
+      "delta_pct": 0.0,
+      "directionality": "lower_is_better",
+      "metric_id": "performance.max_drawdown",
+      "name": "max_drawdown",
+      "reason": null,
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": null,
+      "category": "performance",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "higher_is_better",
+      "metric_id": "performance.calmar",
+      "name": "calmar",
+      "reason": "candidate_and_baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": 0.0833333333,
+      "candidate_value": 0.0833333333,
+      "category": "trading",
+      "delta": 0.0,
+      "delta_pct": 0.0,
+      "directionality": "lower_is_better",
+      "metric_id": "trading.turnover_1d_mean",
+      "name": "turnover_1d_mean",
+      "reason": null,
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": 0.0,
+      "candidate_value": 0.0,
+      "category": "trading",
+      "delta": 0.0,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "trading.turnover_1d_median",
+      "name": "turnover_1d_median",
+      "reason": null,
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": 0.9230769231,
+      "candidate_value": 0.9230769231,
+      "category": "trading",
+      "delta": 0.0,
+      "delta_pct": 0.0,
+      "directionality": "neutral",
+      "metric_id": "trading.avg_exposure",
+      "name": "avg_exposure",
+      "reason": null,
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": 0.4615384615,
+      "candidate_value": 0.4615384615,
+      "category": "trading",
+      "delta": 0.0,
+      "delta_pct": 0.0,
+      "directionality": "lower_is_better",
+      "metric_id": "trading.max_concentration",
+      "name": "max_concentration",
+      "reason": null,
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": 0.4615384615,
+      "candidate_value": 0.4615384615,
+      "category": "trading",
+      "delta": 0.0,
+      "delta_pct": 0.0,
+      "directionality": "lower_is_better",
+      "metric_id": "trading.hhi_mean",
+      "name": "hhi_mean",
+      "reason": null,
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": 3.0,
+      "candidate_value": 1.0,
+      "category": "trading",
+      "delta": -2.0,
+      "delta_pct": -66.666667,
+      "directionality": "lower_is_better",
+      "metric_id": "trading.tx_cost_total",
+      "name": "tx_cost_total",
+      "reason": null,
+      "status": "improved"
+    },
+    {
+      "baseline_value": 2.8842000003,
+      "candidate_value": 0.9612219195,
+      "category": "trading",
+      "delta": -1.9229780808,
+      "delta_pct": -66.672841,
+      "directionality": "lower_is_better",
+      "metric_id": "trading.tx_cost_bps",
+      "name": "tx_cost_bps",
+      "reason": null,
+      "status": "improved"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": 0.0769230769,
+      "category": "trading",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "neutral",
+      "metric_id": "trading.avg_cash",
+      "name": "avg_cash",
+      "reason": "baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": 0.0,
+      "candidate_value": 0.0,
+      "category": "safety",
+      "delta": 0.0,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "safety.nan_inf_violations",
+      "name": "nan_inf_violations",
+      "reason": null,
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": 0.0,
+      "candidate_value": 0.0,
+      "category": "safety",
+      "delta": 0.0,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "safety.action_bounds_violations",
+      "name": "action_bounds_violations",
+      "reason": null,
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": 0.0,
+      "category": "safety",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "safety.constraint_violations_count",
+      "name": "constraint_violations_count",
+      "reason": "baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": 0.0,
+      "category": "safety",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "safety.max_weight_violation_count",
+      "name": "max_weight_violation_count",
+      "reason": "baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": 0.0,
+      "category": "safety",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "safety.exposure_violation_count",
+      "name": "exposure_violation_count",
+      "reason": "baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": 0.0,
+      "category": "safety",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "safety.turnover_violation_count",
+      "name": "turnover_violation_count",
+      "reason": "baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": null,
+      "category": "execution",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "higher_is_better",
+      "metric_id": "execution.summary.fill_rate",
+      "name": "summary.fill_rate",
+      "reason": "candidate_and_baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": null,
+      "category": "execution",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "execution.summary.reject_rate",
+      "name": "summary.reject_rate",
+      "reason": "candidate_and_baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": null,
+      "category": "execution",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "execution.summary.avg_slippage_bps",
+      "name": "summary.avg_slippage_bps",
+      "reason": "candidate_and_baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": null,
+      "category": "execution",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "execution.summary.p95_slippage_bps",
+      "name": "summary.p95_slippage_bps",
+      "reason": "candidate_and_baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": null,
+      "category": "execution",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "execution.summary.total_fees",
+      "name": "summary.total_fees",
+      "reason": "candidate_and_baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": null,
+      "category": "execution",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "execution.summary.turnover_realized",
+      "name": "summary.turnover_realized",
+      "reason": "candidate_and_baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": null,
+      "category": "execution",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "execution.summary.execution_halts",
+      "name": "summary.execution_halts",
+      "reason": "candidate_and_baseline_missing",
+      "status": "unchanged"
+    },
+    {
+      "baseline_value": null,
+      "candidate_value": null,
+      "category": "execution",
+      "delta": null,
+      "delta_pct": null,
+      "directionality": "lower_is_better",
+      "metric_id": "execution.summary.partial_fill_rate",
+      "name": "summary.partial_fill_rate",
+      "reason": "candidate_and_baseline_missing",
+      "status": "unchanged"
+    }
+  ],
+  "missing_metrics": [
+    {
+      "metric_id": "performance.cagr",
+      "reason": "candidate_and_baseline_missing"
+    },
+    {
+      "metric_id": "performance.calmar",
+      "reason": "candidate_and_baseline_missing"
+    },
+    {
+      "metric_id": "trading.avg_cash",
+      "reason": "baseline_missing"
+    },
+    {
+      "metric_id": "safety.constraint_violations_count",
+      "reason": "baseline_missing"
+    },
+    {
+      "metric_id": "safety.max_weight_violation_count",
+      "reason": "baseline_missing"
+    },
+    {
+      "metric_id": "safety.exposure_violation_count",
+      "reason": "baseline_missing"
+    },
+    {
+      "metric_id": "safety.turnover_violation_count",
+      "reason": "baseline_missing"
+    },
+    {
+      "metric_id": "execution.summary.fill_rate",
+      "reason": "candidate_and_baseline_missing"
+    },
+    {
+      "metric_id": "execution.summary.reject_rate",
+      "reason": "candidate_and_baseline_missing"
+    },
+    {
+      "metric_id": "execution.summary.avg_slippage_bps",
+      "reason": "candidate_and_baseline_missing"
+    },
+    {
+      "metric_id": "execution.summary.p95_slippage_bps",
+      "reason": "candidate_and_baseline_missing"
+    },
+    {
+      "metric_id": "execution.summary.total_fees",
+      "reason": "candidate_and_baseline_missing"
+    },
+    {
+      "metric_id": "execution.summary.turnover_realized",
+      "reason": "candidate_and_baseline_missing"
+    },
+    {
+      "metric_id": "execution.summary.execution_halts",
+      "reason": "candidate_and_baseline_missing"
+    },
+    {
+      "metric_id": "execution.summary.partial_fill_rate",
+      "reason": "candidate_and_baseline_missing"
+    }
+  ],
+  "regime_deltas": {
+    "high_vol": {},
+    "low_vol": {},
+    "mid_vol": {}
+  },
+  "summary": {
+    "compared_metrics": 13,
+    "num_improved": 4,
+    "num_missing": 15,
+    "num_regressed": 1,
+    "num_unchanged": 8,
+    "total_metrics": 28
+  }
+}

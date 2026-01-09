@@ -20,8 +20,29 @@ from research.datasets.canonical_equity_loader import CanonicalEquitySlice, buil
 EPS = 1e-9
 UTC = timezone.utc
 BASE_FEATURE_COLUMNS = ("close", "ret_1d", "ret_5d", "vol_10d", "sma_20_dist")
-XSEC_FEATURE_COLUMNS = ("ret_1d_z", "ret_5d_z", "vol_10d_z", "ret_1d_rank", "ret_5d_rank", "rel_strength_20d")
-MARKET_FEATURE_COLUMNS = ("market_ret_1d", "market_vol_20d", "dispersion_1d", "corr_mean_20d")
+XSEC_FEATURE_COLUMNS = (
+    "ret_1d_z",
+    "ret_5d_z",
+    "vol_10d_z",
+    "ret_1d_rank",
+    "ret_5d_rank",
+    "rel_strength_20d",
+    "volume_zscore_20d",
+    "liquidity_rank",
+    "trend_strength_20d",
+)
+MARKET_FEATURE_COLUMNS = (
+    "market_ret_1d",
+    "market_vol_20d",
+    "market_vol_of_vol_20d",
+    "dispersion_1d",
+    "dispersion_5d",
+    "breadth_up_1d",
+    "breadth_down_1d",
+    "breadth_up_5d",
+    "corr_mean_20d",
+    "corr_spike_20d",
+)
 EQUITY_XSEC_OBSERVATION_COLUMNS = BASE_FEATURE_COLUMNS + XSEC_FEATURE_COLUMNS + MARKET_FEATURE_COLUMNS
 
 
@@ -65,13 +86,26 @@ def build_equity_xsec_feature_frames(
     ret_1d_z = _compute_zscores(ret_1d)
     ret_5d_z = _compute_zscores(ret_5d)
     vol_10d_z = _compute_zscores(vol_10d)
+    volume_panel = _align_volume_panel(slices, calendar, order, forward_fill_limit)
+    log_volume = np.log1p(volume_panel).replace([np.inf, -np.inf], 0.0)
+    volume_z = _compute_zscores(log_volume)
+    liquidity_rank = _compute_ranks(log_volume, order)
     ret_1d_rank = _compute_ranks(ret_1d, order)
     ret_5d_rank = _compute_ranks(ret_5d, order)
 
     market_ret_1d = ret_1d.mean(axis=1).fillna(0.0)
     dispersion_1d = ret_1d.std(axis=1, ddof=0).fillna(0.0)
-    market_vol_20d = market_ret_1d.rolling(window=20, min_periods=2).std(ddof=0).fillna(0.0)
+    dispersion_5d = ret_5d.std(axis=1, ddof=0).fillna(0.0)
+    market_vol_20d_raw = market_ret_1d.rolling(window=20, min_periods=2).std(ddof=0)
+    market_vol_20d = market_vol_20d_raw.fillna(0.0)
+    market_vol_of_vol_20d = market_vol_20d_raw.rolling(window=20, min_periods=2).std(ddof=0).fillna(0.0)
     corr_mean_20d = _rolling_corr_mean(ret_1d, window=20)
+    corr_median_60d = corr_mean_20d.rolling(window=60, min_periods=20).median()
+    corr_spike_20d = (corr_mean_20d - corr_median_60d).fillna(0.0)
+    breadth_up_1d = (ret_1d > 0).mean(axis=1).fillna(0.0)
+    breadth_down_1d = (ret_1d < 0).mean(axis=1).fillna(0.0)
+    breadth_up_5d = (ret_5d > 0).mean(axis=1).fillna(0.0)
+    trend_strength_20d = (ret_20d / (vol_10d + EPS)).replace([np.inf, -np.inf], 0.0).fillna(0.0)
 
     frames: Dict[str, "pd.DataFrame"] = {}
     for symbol in order:
@@ -88,10 +122,19 @@ def build_equity_xsec_feature_frames(
                 "ret_1d_rank": ret_1d_rank[symbol],
                 "ret_5d_rank": ret_5d_rank[symbol],
                 "rel_strength_20d": rel_strength_20d[symbol],
+                "volume_zscore_20d": volume_z[symbol],
+                "liquidity_rank": liquidity_rank[symbol],
+                "trend_strength_20d": trend_strength_20d[symbol],
                 "market_ret_1d": market_ret_1d,
                 "market_vol_20d": market_vol_20d,
+                "market_vol_of_vol_20d": market_vol_of_vol_20d,
                 "dispersion_1d": dispersion_1d,
+                "dispersion_5d": dispersion_5d,
+                "breadth_up_1d": breadth_up_1d,
+                "breadth_down_1d": breadth_down_1d,
+                "breadth_up_5d": breadth_up_5d,
                 "corr_mean_20d": corr_mean_20d,
+                "corr_spike_20d": corr_spike_20d,
             }
         )
         combined = combined.replace([np.inf, -np.inf], 0.0).fillna(0.0)
@@ -121,6 +164,27 @@ def _align_close_panel(
         panel[symbol] = aligned
     panel = panel.dropna(how="any")
     return panel
+
+
+def _align_volume_panel(
+    slices: Mapping[str, CanonicalEquitySlice],
+    calendar: "pd.DatetimeIndex",
+    order: Sequence[str],
+    forward_fill_limit: int,
+) -> "pd.DataFrame":
+    limit = max(0, int(forward_fill_limit))
+    panel = pd.DataFrame(index=calendar)
+    for symbol in order:
+        slice_data = slices[symbol]
+        if slice_data.frame.empty or "volume" not in slice_data.frame.columns:
+            aligned = pd.Series(0.0, index=calendar)
+        else:
+            volumes = slice_data.frame["volume"].astype(float)
+            aligned = volumes.reindex(calendar)
+        if limit > 0:
+            aligned = aligned.ffill(limit=limit)
+        panel[symbol] = aligned.fillna(0.0)
+    return panel.fillna(0.0)
 
 
 def _compute_zscores(values: "pd.DataFrame") -> "pd.DataFrame":

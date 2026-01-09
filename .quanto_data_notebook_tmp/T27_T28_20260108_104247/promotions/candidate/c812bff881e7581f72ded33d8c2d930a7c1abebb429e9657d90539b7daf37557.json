@@ -1,0 +1,8 @@
+{
+  "experiment_id": "c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557",
+  "metrics_path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/experiments/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/evaluation/metrics.json",
+  "promotion_reason": "Notebook validation: promoting a passing baseline to test T25 shadow replay engine.",
+  "qualification_report_path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/experiments/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/promotion/qualification_report.json",
+  "spec_path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/experiments/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/spec/experiment_spec.json",
+  "tier": "candidate"
+}

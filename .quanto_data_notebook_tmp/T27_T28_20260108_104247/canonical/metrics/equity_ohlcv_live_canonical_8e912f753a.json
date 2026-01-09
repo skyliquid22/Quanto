@@ -1,0 +1,8 @@
+{
+  "domain": "equity_ohlcv",
+  "fallback_count": 0,
+  "fallback_usage_rate": 0.0,
+  "percent_missing_primary": 0.0,
+  "run_id": "live_canonical_8e912f753a",
+  "total_records": 0
+}

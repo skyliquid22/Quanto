@@ -1,0 +1,12 @@
+{
+  "creation_timestamp": "2020-04-08T05:29:59+00:00",
+  "domain": "equity_ohlcv",
+  "input_file_hashes": [],
+  "invalid_records": 0,
+  "run_id": "raw_equity_daily_2023_q1",
+  "schema_version": "1.2",
+  "source_vendor": "polygon",
+  "total_records": 62,
+  "valid_records": 62,
+  "validation_status": "passed"
+}

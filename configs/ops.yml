@@ -1,0 +1,16 @@
+paper_trading:
+  cron: "30 14 * * 1-5"
+  timezone: "America/New_York"
+  grace_minutes: 45
+  expect_trades: false
+  runbook_url: "docs/runbooks/paper_trading_ops.md"
+  backoff:
+    initial_seconds: 30
+    max_seconds: 600
+    multiplier: 2
+    max_attempts: 3
+  alerts:
+    hard_channels:
+      - "ops/oncall"
+    soft_channels:
+      - "ops/oncall"

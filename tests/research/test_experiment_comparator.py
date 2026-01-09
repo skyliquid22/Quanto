@@ -37,12 +37,20 @@ def _write_experiment(root: Path, experiment_id: str, sharpe: float, drawdown: f
         "trading": {
             "turnover_1d_mean": 0.05,
             "turnover_1d_median": 0.04,
+            "turnover_1d_std": 0.02,
+            "turnover_1d_p95": 0.06,
             "avg_exposure": 1.0,
             "max_concentration": 0.6,
             "hhi_mean": 0.45,
             "tx_cost_total": tx_cost_total,
             "tx_cost_bps": 15.0,
             "avg_cash": 0.1,
+        },
+        "stability": {
+            "turnover_std": 0.02,
+            "mode_churn_rate": 0.0,
+            "mode_set_size": 1.0,
+            "cost_curve_span": 0.0,
         },
         "safety": {
             "nan_inf_violations": 0.0,
@@ -76,6 +84,7 @@ def _write_experiment(root: Path, experiment_id: str, sharpe: float, drawdown: f
                 "low_vol": {"avg_slippage_bps": 1.0, "p95_slippage_bps": 2.0, "reject_rate": 0.01, "fill_rate": 0.99},
             },
         },
+        "returns": [0.0, 0.01, 0.0],
     }
     metrics_path = base / "evaluation" / "metrics.json"
     metrics_path.write_text(json.dumps(metrics, sort_keys=True, indent=2), encoding="utf-8")

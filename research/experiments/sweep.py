@@ -169,13 +169,44 @@ def _require_str(value: Any, label: str) -> str:
 
 
 def _normalize_values(values: Any) -> Sequence[Any]:
+    if isinstance(values, Mapping):
+        if "grid" in values:
+            return _grid_values(values["grid"])
+        if "values" in values:
+            values = values["values"]
     if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
         normalized = list(values)
-    else:
-        raise ValueError("Sweep dimension values must be provided as an array.")
-    if not normalized:
-        raise ValueError("Sweep dimension lists must contain at least one value.")
-    return normalized
+        if not normalized:
+            raise ValueError("Sweep dimension lists must contain at least one value.")
+        return normalized
+    raise ValueError("Sweep dimension values must be provided as an array or grid.")
+
+
+def _grid_values(payload: Mapping[str, Any]) -> Sequence[float]:
+    if not isinstance(payload, Mapping):
+        raise ValueError("grid specification must be a mapping")
+    start = _require_number(payload.get("start"), "grid.start")
+    count = int(_require_number(payload.get("count"), "grid.count"))
+    if count <= 0:
+        raise ValueError("grid.count must be positive")
+    step_value = payload.get("step")
+    stop_value = payload.get("stop")
+    if step_value is None and stop_value is None:
+        step_value = 1
+    if step_value is None:
+        stop = _require_number(stop_value, "grid.stop")
+        step_value = (stop - start) / max(count - 1, 1)
+    step = float(step_value)
+    return [float(start + idx * step) for idx in range(count)]
+
+
+def _require_number(value: Any, label: str) -> float:
+    if value is None:
+        raise ValueError(f"{label} must be provided")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+        raise ValueError(f"{label} must be numeric") from exc
 
 
 def _validate_dimensions(base_payload: Mapping[str, Any], dimensions: Sequence[SweepDimension]) -> None:

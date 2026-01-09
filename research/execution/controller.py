@@ -59,6 +59,7 @@ class ExecutionController:
         day_start_value: float,
         peak_value: float,
         regime_bucket: str | None = None,
+        resume_snapshot: Mapping[str, object] | None = None,
     ) -> ExecutionStepResult:
         price_map = {symbol: float(prices[symbol]) for symbol in prices}
         if hasattr(self._broker, "update_market_data"):

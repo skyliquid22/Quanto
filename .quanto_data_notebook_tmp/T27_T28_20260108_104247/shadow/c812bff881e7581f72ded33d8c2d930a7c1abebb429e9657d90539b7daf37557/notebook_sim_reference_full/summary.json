@@ -1,0 +1,8 @@
+{
+  "completed": true,
+  "experiment_id": "c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557",
+  "log_path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_reference_full/logs/steps.jsonl",
+  "run_id": "notebook_sim_reference_full",
+  "state_path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_reference_full/state.json",
+  "steps_executed": 13
+}

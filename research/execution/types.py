@@ -157,6 +157,10 @@ class ExecutionStepResult:
     broker_errors: list[str]
     halted: bool
     halt_reason: str | None
+    client_broker_map: dict[str, str] | None = None
+    account_snapshot: AccountSnapshot | None = None
+    position_snapshots: list[PositionSnapshot] | None = None
+    gate_report: dict[str, object] | None = None
 
 
 # Late import to avoid circular dependency when typing PortfolioUpdate in dataclasses

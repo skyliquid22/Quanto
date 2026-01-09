@@ -21,6 +21,11 @@ _METRIC_TARGETS = (
     ("trading.turnover_1d_mean", "lower_is_better"),
 )
 _PRECISION = 10
+_REGIME_METRICS = {
+    "total_return": "higher_is_better",
+    "sharpe": "higher_is_better",
+    "max_drawdown": "lower_is_better",
+}
 
 
 @dataclass(frozen=True)
@@ -106,6 +111,7 @@ def _build_metric_summary(
         }
 
     configuration_counts = _configuration_counts(metric_entries, result.dimension_names)
+    regime_summary = _build_regime_summary(metric_entries)
     payload = OrderedDict(
         (
             ("sweep_name", result.sweep_name),
@@ -116,6 +122,7 @@ def _build_metric_summary(
             ("metrics", metrics_payload),
             ("extrema", extrema_payload),
             ("configuration_counts", configuration_counts),
+            ("regime_summary", regime_summary),
             ("missing_metrics", list(missing)),
         )
     )
@@ -182,6 +189,60 @@ def _extract_metric(payload: Mapping[str, Any], metric_id: str) -> float | None:
     if not math.isfinite(value):
         return None
     return float(value)
+
+
+def _build_regime_summary(metric_entries: Sequence[_MetricEntry]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = OrderedDict()
+    for bucket in ("high_vol", "mid_vol", "low_vol"):
+        bucket_payload: Dict[str, Any] = OrderedDict()
+        for metric_id, direction in _REGIME_METRICS.items():
+            samples: list[tuple[float, _MetricEntry]] = []
+            for entry in metric_entries:
+                value = _extract_regime_metric(entry.payload, bucket, metric_id)
+                if value is None:
+                    continue
+                samples.append((value, entry))
+            numbers = [val for val, _ in samples]
+            mean_value = _round_float(fmean(numbers)) if numbers else None
+            variance = None
+            if len(numbers) > 1:
+                std_value = pstdev(numbers)
+                variance = _round_float(std_value * std_value)
+            elif numbers:
+                variance = 0.0
+            else:
+                variance = None
+            worst = None
+            for value, entry in samples:
+                if worst is None or _is_worse(direction, value, worst[0]):
+                    worst = (value, entry)
+            bucket_payload[metric_id] = {
+                "samples": len(numbers),
+                "mean": mean_value,
+                "variance": variance,
+                "worst": _extreme_payload(worst),
+            }
+        summary[bucket] = bucket_payload
+    return summary
+
+
+def _extract_regime_metric(payload: Mapping[str, Any], bucket: str, metric: str) -> float | None:
+    regime_payload = payload.get("performance_by_regime")
+    if not isinstance(regime_payload, Mapping):
+        return None
+    bucket_payload = regime_payload.get(bucket)
+    if not isinstance(bucket_payload, Mapping):
+        return None
+    value = bucket_payload.get(metric)
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
 
 
 def _is_better(direction: str, value: float, current: float) -> bool:

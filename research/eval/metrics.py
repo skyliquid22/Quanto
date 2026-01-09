@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 import math
 from statistics import median
@@ -34,6 +35,7 @@ class MetricResult:
     returns: List[float]
     regime_slicing: Dict[str, object] | None = None
     performance_by_regime: Dict[str, Dict[str, float | None]] | None = None
+    stability: Dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,8 @@ METRIC_SCHEMA: Tuple[MetricSchemaEntry, ...] = (
     MetricSchemaEntry("calmar", "performance", "higher_is_better", "ratio", "Calmar ratio."),
     MetricSchemaEntry("turnover_1d_mean", "trading", "lower_is_better", "ratio", "Mean 1-day turnover."),
     MetricSchemaEntry("turnover_1d_median", "trading", "lower_is_better", "ratio", "Median 1-day turnover."),
+    MetricSchemaEntry("turnover_1d_std", "trading", "lower_is_better", "ratio", "Std dev of 1-day turnover."),
+    MetricSchemaEntry("turnover_1d_p95", "trading", "lower_is_better", "ratio", "95th percentile 1-day turnover."),
     MetricSchemaEntry("avg_exposure", "trading", "neutral", "ratio", "Mean total exposure."),
     MetricSchemaEntry("max_concentration", "trading", "lower_is_better", "ratio", "Average max symbol weight."),
     MetricSchemaEntry("hhi_mean", "trading", "lower_is_better", "ratio", "Mean Herfindahl-Hirschman index."),
@@ -72,6 +76,9 @@ METRIC_SCHEMA: Tuple[MetricSchemaEntry, ...] = (
     MetricSchemaEntry("max_weight_violation_count", "safety", "lower_is_better", "count", "Per-asset cap violations."),
     MetricSchemaEntry("exposure_violation_count", "safety", "lower_is_better", "count", "Exposure cap or min cash violations."),
     MetricSchemaEntry("turnover_violation_count", "safety", "lower_is_better", "count", "Turnover cap violations."),
+    MetricSchemaEntry("mode_churn_rate", "stability", "lower_is_better", "ratio", "Normalized hierarchy mode churn."),
+    MetricSchemaEntry("mode_set_size", "stability", "neutral", "count", "Number of active hierarchy modes."),
+    MetricSchemaEntry("cost_curve_span", "stability", "lower_is_better", "ratio", "Net return span across cost multipliers."),
     MetricSchemaEntry("summary.fill_rate", "execution", "higher_is_better", "ratio", "Execution fill rate."),
     MetricSchemaEntry("summary.reject_rate", "execution", "lower_is_better", "ratio", "Execution reject rate."),
     MetricSchemaEntry("summary.avg_slippage_bps", "execution", "lower_is_better", "bps", "Average slippage for fills."),
@@ -135,6 +142,10 @@ def compute_metric_bundle(
     for key, value in constraint_diag.items():
         safety[key] = float(value)
     rounded_returns = [_round(value, cfg.float_precision) for value in returns]
+    cost_curve, cost_span = _cost_sensitivity_curve(account_values, transaction_costs, returns, cfg.float_precision)
+    if cost_curve:
+        trading["cost_sensitivity_curve"] = cost_curve
+    stability = _stability_metrics(trading, mode_diag, cfg.float_precision, cost_span)
     regime_result = compute_regime_slices(
         regime_feature_series,
         regime_feature_names,
@@ -151,6 +162,7 @@ def compute_metric_bundle(
         returns=rounded_returns,
         regime_slicing=regime_result.metadata if regime_result else None,
         performance_by_regime=regime_result.performance_by_regime if regime_result else None,
+        stability=stability,
     )
 
 
@@ -242,6 +254,8 @@ def _trading_metrics(
     trading_metrics = {
         "turnover_1d_mean": _round(_mean(turnover_steps), precision),
         "turnover_1d_median": _round(median(turnover_steps) if turnover_steps else 0.0, precision),
+        "turnover_1d_std": _round(_std(turnover_steps), precision),
+        "turnover_1d_p95": _round(_percentile(turnover_steps, 0.95), precision),
         "avg_exposure": _round(_mean(exposures), precision),
         "max_concentration": _round(_mean(concentrations), precision),
         "hhi_mean": _round(_mean(hhi_values), precision),
@@ -456,6 +470,27 @@ def _mode_diagnostics(
     return diag
 
 
+def _stability_metrics(
+    trading_metrics: Mapping[str, object],
+    mode_diag: Mapping[str, Dict[str, object]],
+    precision: int,
+    cost_span: float,
+) -> Dict[str, float]:
+    counts = mode_diag.get("counts") or {}
+    total_steps = sum(int(value) for value in counts.values())
+    transitions = mode_diag.get("transitions") or {}
+    transition_count = sum(int(value) for value in transitions.values())
+    denominator = max(total_steps - 1, 1)
+    churn_rate = transition_count / denominator if denominator > 0 else 0.0
+    return {
+        "turnover_std": float(trading_metrics.get("turnover_1d_std", 0.0)),
+        "turnover_p95": float(trading_metrics.get("turnover_1d_p95", 0.0)),
+        "mode_churn_rate": _round(churn_rate, precision),
+        "mode_set_size": float(len(counts)),
+        "cost_curve_span": _round(cost_span, precision),
+    }
+
+
 def _simple_returns(account_values: Sequence[float]) -> List[float]:
     returns: List[float] = []
     for idx in range(1, len(account_values)):
@@ -519,6 +554,51 @@ def _round(value: float, precision: int) -> float:
     if rounded == -0.0:
         return 0.0
     return rounded
+
+
+def _percentile(values: Sequence[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(v) for v in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = percentile * (len(ordered) - 1)
+    low = math.floor(rank)
+    high = math.ceil(rank)
+    if low == high:
+        return ordered[int(rank)]
+    weight = rank - low
+    return ordered[low] + weight * (ordered[high] - ordered[low])
+
+
+def _cost_sensitivity_curve(
+    account_values: Sequence[float],
+    transaction_costs: Sequence[float] | None,
+    returns: Sequence[float],
+    precision: int,
+) -> Tuple[Dict[str, float], float]:
+    tx = list(transaction_costs or [])
+    if not tx or len(account_values) < 2:
+        return {}, 0.0
+    prev_values = account_values[:-1]
+    steps = min(len(prev_values), len(tx))
+    if steps == 0:
+        return {}, 0.0
+    cost_rates = []
+    for idx in range(steps):
+        prev = prev_values[idx]
+        cost_rates.append((tx[idx] / prev) if prev else 0.0)
+    gross_returns = [returns[idx] + cost_rates[idx] for idx in range(steps)]
+    multipliers = (0.5, 1.0, 1.5)
+    curve: Dict[str, float] = OrderedDict()
+    for multiplier in multipliers:
+        growth = 1.0
+        for idx, gross in enumerate(gross_returns):
+            net = gross - multiplier * cost_rates[idx]
+            growth *= 1.0 + net
+        curve[str(multiplier)] = _round(growth - 1.0, precision)
+    span = max(curve.values()) - min(curve.values()) if curve else 0.0
+    return curve, span
 
 
 __all__ = [

@@ -44,6 +44,9 @@ class AlpacaBrokerAdapter(BrokerAdapter):
         resolved = config or AlpacaBrokerConfig.from_env()
         if not resolved.api_key or not resolved.secret_key:
             raise RuntimeError("Alpaca adapter requires non-empty API credentials.")
+        base_url = str(resolved.base_url or "")
+        if "paper" not in base_url:
+            raise RuntimeError("Alpaca adapter is locked to paper trading; refusing non-paper base URL.")
         self._config = resolved
 
     def submit_orders(self, orders: Sequence[Order], *, as_of: str) -> SubmissionResult:

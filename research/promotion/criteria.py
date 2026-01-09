@@ -179,6 +179,16 @@ class QualificationCriteria:
         for reason in self._sanity_reasons(metrics_payload):
             failed_hard.append(reason)
 
+        if not self._has_deterministic_replay(metrics_payload):
+            failed_hard.append("deterministic_replay_missing")
+
+        sharpe_reason = self._sharpe_improvement_reason(metrics_payload, baseline_metrics)
+        if sharpe_reason:
+            failed_soft.append(sharpe_reason)
+
+        for reason in self._stability_soft_failures(metrics_payload, baseline_metrics):
+            failed_soft.append(reason)
+
         missing_artifacts = self._missing_artifacts(candidate_record)
         if missing_artifacts:
             missing = ",".join(sorted(missing_artifacts))
@@ -314,6 +324,52 @@ class QualificationCriteria:
             if not candidate.exists():
                 missing.append(rel_path)
         return missing
+
+    def _has_deterministic_replay(self, metrics_payload: Mapping[str, Any]) -> bool:
+        returns = metrics_payload.get("returns")
+        if not isinstance(returns, Sequence):
+            return False
+        normalized = []
+        for value in returns:
+            number = _as_float(value)
+            if number is None:
+                return False
+            normalized.append(number)
+        return bool(normalized)
+
+    def _sharpe_improvement_reason(
+        self,
+        candidate_metrics: Mapping[str, Any],
+        baseline_metrics: Mapping[str, Any],
+    ) -> str | None:
+        candidate = _extract_metric(candidate_metrics, "performance.sharpe")
+        baseline = _extract_metric(baseline_metrics, "performance.sharpe")
+        if candidate is None or baseline is None:
+            return "soft_gate:sharpe_missing"
+        if candidate + 1e-9 < baseline:
+            delta = _round_float(candidate - baseline)
+            return f"soft_gate:sharpe_not_improved:{delta}"
+        return None
+
+    def _stability_soft_failures(
+        self,
+        candidate_metrics: Mapping[str, Any],
+        baseline_metrics: Mapping[str, Any],
+    ) -> List[str]:
+        reasons: List[str] = []
+        candidate_stability = candidate_metrics.get("stability")
+        baseline_stability = baseline_metrics.get("stability")
+        if not isinstance(candidate_stability, Mapping) or not isinstance(baseline_stability, Mapping):
+            return reasons
+        keys = ("turnover_std", "mode_churn_rate", "cost_curve_span")
+        for key in keys:
+            candidate_value = _as_float(candidate_stability.get(key))
+            baseline_value = _as_float(baseline_stability.get(key))
+            if candidate_value is None or baseline_value is None:
+                continue
+            if candidate_value > baseline_value + 1e-9:
+                reasons.append(f"stability_regressed:{key}")
+        return reasons
 
     def _route_failure(
         self,

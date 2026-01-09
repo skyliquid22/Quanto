@@ -1,0 +1,26 @@
+{
+  "cash": -0.0003635275198149445,
+  "current_date": "2023-03-31",
+  "current_step": 13,
+  "experiment_id": "c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557",
+  "holdings": [
+    32.81473266313785,
+    18.769162040067403
+  ],
+  "last_mode": null,
+  "last_raw_action": [
+    0.5,
+    0.5
+  ],
+  "last_turnover": 0.0003359060088409249,
+  "last_weights": [
+    0.5000000167953009,
+    0.500000016795301
+  ],
+  "portfolio_value": 10822.298468775345,
+  "run_id": "replay_2ec0b93d036c",
+  "symbols": [
+    "AAPL",
+    "MSFT"
+  ]
+}

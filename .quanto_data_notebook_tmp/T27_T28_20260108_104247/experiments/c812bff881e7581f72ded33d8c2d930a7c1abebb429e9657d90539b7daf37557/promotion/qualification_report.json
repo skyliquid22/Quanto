@@ -1,0 +1,399 @@
+{
+  "baseline_experiment_id": "0dec4f1989638e4dfa29a8ce324fa3b54d33a1a2e2d7b771bab0fa4afca1568e",
+  "execution_metrics_resolution": {
+    "baseline": {
+      "attempted": [
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/experiments/0dec4f1989638e4dfa29a8ce324fa3b54d33a1a2e2d7b771bab0fa4afca1568e/evaluation/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/experiments/0dec4f1989638e4dfa29a8ce324fa3b54d33a1a2e2d7b771bab0fa4afca1568e/evaluation/execution_metrics.json"
+      ],
+      "execution_metrics_path": null,
+      "experiment_id": "0dec4f1989638e4dfa29a8ce324fa3b54d33a1a2e2d7b771bab0fa4afca1568e",
+      "found": false,
+      "metrics_path": null,
+      "source": null
+    },
+    "candidate": {
+      "attempted": [
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/experiments/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/evaluation/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/experiments/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/evaluation/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_reference_full/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_reference_full/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_reference_full/logs/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_reference_full/logs/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_reference_full/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_reference_full/logs/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_resume/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_resume/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_resume/logs/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_resume/logs/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_resume/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_resume/logs/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run2/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run2/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run2/logs/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run2/logs/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run2/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run2/logs/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run1/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run1/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run1/logs/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run1/logs/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run1/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/notebook_sim_run1/logs/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/replay_2ec0b93d036c/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/replay_2ec0b93d036c/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/replay_2ec0b93d036c/logs/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/replay_2ec0b93d036c/logs/metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/replay_2ec0b93d036c/execution_metrics.json",
+        "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/replay_2ec0b93d036c/logs/execution_metrics.json"
+      ],
+      "execution_metrics_path": null,
+      "experiment_id": "c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557",
+      "found": false,
+      "metrics_path": null,
+      "source": null
+    }
+  },
+  "execution_qualification": {
+    "baseline": {},
+    "candidate": {},
+    "comparison": {
+      "regime": {
+        "high_vol": {},
+        "low_vol": {},
+        "mid_vol": {}
+      },
+      "summary": {
+        "avg_slippage_bps": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "delta_pct": null
+        },
+        "execution_halts": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "delta_pct": null
+        },
+        "fill_rate": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "delta_pct": null
+        },
+        "p95_slippage_bps": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "delta_pct": null
+        },
+        "partial_fill_rate": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "delta_pct": null
+        },
+        "reject_rate": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "delta_pct": null
+        },
+        "total_fees": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "delta_pct": null
+        },
+        "turnover_realized": {
+          "baseline": null,
+          "candidate": null,
+          "delta": null,
+          "delta_pct": null
+        }
+      }
+    },
+    "gates": []
+  },
+  "experiment_id": "c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557",
+  "failed_hard": [
+    "execution_metrics_missing",
+    "execution_metrics_missing"
+  ],
+  "failed_soft": [
+    "execution_baseline_metrics_missing"
+  ],
+  "gate_summary": {
+    "evaluations": [
+      {
+        "gate_id": "sharpe_guard",
+        "gate_type": "hard",
+        "message": "Sharpe must not decrease by more than 5%.",
+        "metric_id": "performance.sharpe",
+        "observed": {
+          "baseline": 8.8782496432,
+          "candidate": 8.8767355318,
+          "degradation_pct": 0.017054,
+          "delta": -0.0015141114,
+          "delta_pct": -0.017054
+        },
+        "status": "pass",
+        "thresholds": {
+          "max_degradation_pct": 5.0,
+          "max_value": null
+        }
+      },
+      {
+        "gate_id": "drawdown_guard",
+        "gate_type": "soft",
+        "message": "Max drawdown must not increase by more than 10%.",
+        "metric_id": "performance.max_drawdown",
+        "observed": {
+          "baseline": 0.0176287855,
+          "candidate": 0.0176287855,
+          "degradation_pct": 0.0,
+          "delta": 0.0,
+          "delta_pct": 0.0
+        },
+        "status": "pass",
+        "thresholds": {
+          "max_degradation_pct": 10.0,
+          "max_value": null
+        }
+      },
+      {
+        "gate_id": "turnover_guard",
+        "gate_type": "soft",
+        "message": "Turnover must not increase by more than 15%.",
+        "metric_id": "trading.turnover_1d_mean",
+        "observed": {
+          "baseline": 0.0833333333,
+          "candidate": 0.0833333333,
+          "degradation_pct": 0.0,
+          "delta": 0.0,
+          "delta_pct": 0.0
+        },
+        "status": "pass",
+        "thresholds": {
+          "max_degradation_pct": 15.0,
+          "max_value": null
+        }
+      },
+      {
+        "gate_id": "nan_inf_guard",
+        "gate_type": "hard",
+        "message": "NaN/Inf violations must remain zero.",
+        "metric_id": "safety.nan_inf_violations",
+        "observed": {
+          "baseline": 0.0,
+          "candidate": 0.0,
+          "delta": 0.0,
+          "delta_pct": null
+        },
+        "status": "pass",
+        "thresholds": {
+          "max_degradation_pct": null,
+          "max_value": 0.0
+        }
+      }
+    ],
+    "hard_failures": 0,
+    "overall_status": "pass",
+    "soft_warnings": 0
+  },
+  "metrics_snapshot": {
+    "config": {
+      "evaluation": {
+        "annualization_days": 252,
+        "float_precision": 10,
+        "min_cagr_periods": 252,
+        "risk_free_rate": 0.0
+      },
+      "risk": {
+        "exposure_cap": 1.0,
+        "long_only": true,
+        "max_turnover_1d": null,
+        "max_weight": 1.0,
+        "min_cash": 0.0
+      }
+    },
+    "inputs_used": {
+      "canonical/equity_ohlcv/AAPL/daily/2023.parquet": "sha256:12d72f9853b6836ac36f61429309786f564d8a1733a69febf917d69861b0f8ef",
+      "canonical/equity_ohlcv/MSFT/daily/2023.parquet": "sha256:e82da670c02cda3e22f47461e8d8b30f68867d4bc1f3cc947801f3e1eb9c8950"
+    },
+    "metadata": {
+      "end_date": "2023-06-30",
+      "feature_set": "sma_v1",
+      "interval": "daily",
+      "policy": {
+        "type": "equal_weight"
+      },
+      "policy_id": "equal_weight",
+      "rollout": {
+        "end_date": "2023-06-30",
+        "feature_set": "sma_v1",
+        "interval": "daily",
+        "observation_columns": [
+          "close",
+          "sma_fast",
+          "sma_slow",
+          "sma_diff",
+          "sma_signal"
+        ],
+        "policy": {
+          "type": "equal_weight"
+        },
+        "risk_config": {
+          "exposure_cap": 1.0,
+          "long_only": true,
+          "max_turnover_1d": null,
+          "max_weight": 1.0,
+          "min_cash": 0.0
+        },
+        "sma_config": {
+          "fast_window": 20,
+          "slow_window": 50
+        },
+        "start_date": "2023-01-01",
+        "symbols": [
+          "AAPL",
+          "MSFT"
+        ],
+        "transaction_cost_bp": 1
+      },
+      "run_id": "c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557",
+      "start_date": "2023-01-01",
+      "symbols": [
+        "AAPL",
+        "MSFT"
+      ]
+    },
+    "performance": {
+      "cagr": null,
+      "calmar": null,
+      "max_drawdown": 0.0176287855,
+      "sharpe": 8.8767355318,
+      "total_return": 0.0822327267,
+      "volatility_ann": 0.1895825428
+    },
+    "safety": {
+      "action_bounds_violations": 0.0,
+      "constraint_violations_count": 0.0,
+      "exposure_violation_count": 0.0,
+      "max_weight_violation_count": 0.0,
+      "nan_inf_violations": 0.0,
+      "turnover_violation_count": 0.0
+    },
+    "series": {
+      "account_value": [
+        10000.0,
+        10295.122884956727,
+        10327.246047494336,
+        10274.14919113259,
+        10364.755918106634,
+        10289.374128579248,
+        10426.6917144341,
+        10524.629562085946,
+        10381.351589671414,
+        10339.093125263833,
+        10540.574293865879,
+        10659.207275851853,
+        10822.327266771614
+      ],
+      "returns": [
+        0.0295122885,
+        0.0031202311,
+        -0.0051414342,
+        0.0088189032,
+        -0.0072728958,
+        0.0133455723,
+        0.0093929935,
+        -0.0136135882,
+        -0.004070613,
+        0.0194873154,
+        0.0112548879,
+        0.015303201
+      ],
+      "timestamps": [
+        "2023-03-15T04:00:00+00:00",
+        "2023-03-16T04:00:00+00:00",
+        "2023-03-17T04:00:00+00:00",
+        "2023-03-20T04:00:00+00:00",
+        "2023-03-21T04:00:00+00:00",
+        "2023-03-22T04:00:00+00:00",
+        "2023-03-23T04:00:00+00:00",
+        "2023-03-24T04:00:00+00:00",
+        "2023-03-27T04:00:00+00:00",
+        "2023-03-28T04:00:00+00:00",
+        "2023-03-29T04:00:00+00:00",
+        "2023-03-30T04:00:00+00:00",
+        "2023-03-31T04:00:00+00:00"
+      ],
+      "transaction_costs": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "weights": {
+        "AAPL": [
+          0.0,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5
+        ],
+        "MSFT": [
+          0.0,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5
+        ]
+      }
+    },
+    "trading": {
+      "avg_cash": 0.0769230769,
+      "avg_exposure": 0.9230769231,
+      "avg_exposure_by_mode": {},
+      "avg_exposure_by_regime": {},
+      "avg_turnover_by_mode": {},
+      "avg_turnover_by_regime": {},
+      "hhi_mean": 0.4615384615,
+      "max_concentration": 0.4615384615,
+      "mode_counts": {},
+      "mode_transitions": {},
+      "regime_feature_summary": {},
+      "turnover_1d_mean": 0.0833333333,
+      "turnover_1d_median": 0.0,
+      "tx_cost_bps": 0.9612219195,
+      "tx_cost_total": 1.0
+    }
+  },
+  "passed": false
+}

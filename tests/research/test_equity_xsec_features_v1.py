@@ -46,6 +46,7 @@ def test_equity_xsec_features_match_formulas():
     assert sorted(frames.keys()) == ["AAA", "BBB", "CCC"]
     sample = frames["AAA"]
     assert tuple(sample.columns) == ("timestamp", *EQUITY_XSEC_OBSERVATION_COLUMNS)
+    assert "volume_zscore_20d" in sample.columns
 
     last_rows = {symbol: df.iloc[-1] for symbol, df in frames.items()}
     ret_values = [last_rows[symbol]["ret_1d"] for symbol in ("AAA", "BBB", "CCC")]
@@ -61,6 +62,7 @@ def test_equity_xsec_features_match_formulas():
     assert last_rows["AAA"]["ret_1d_rank"] == pytest.approx(0.5)
     assert last_rows["BBB"]["ret_1d_rank"] == pytest.approx(1.0)
     assert last_rows["BBB"]["rel_strength_20d"] == pytest.approx(0.0)
+    assert last_rows["AAA"]["trend_strength_20d"] == pytest.approx(0.0)
 
     vol_values = [last_rows[symbol]["vol_10d"] for symbol in ("AAA", "BBB", "CCC")]
     vol_mean = sum(vol_values) / len(vol_values)
@@ -78,6 +80,15 @@ def test_equity_xsec_features_match_formulas():
         pd.Series(market_series).rolling(window=20, min_periods=2).std(ddof=0).iloc[-1]
     )
     assert last_rows["CCC"]["market_vol_20d"] == pytest.approx(expected_market_vol)
+    expected_vol_of_vol = (
+        pd.Series(market_series)
+        .rolling(window=20, min_periods=2)
+        .std(ddof=0)
+        .rolling(window=20, min_periods=2)
+        .std(ddof=0)
+        .iloc[-1]
+    )
+    assert last_rows["CCC"]["market_vol_of_vol_20d"] == pytest.approx(expected_vol_of_vol)
 
     ret_history = {symbol: df.set_index("timestamp")["ret_1d"] for symbol, df in frames.items()}
     ret_panel = pd.DataFrame(ret_history)
@@ -101,3 +112,9 @@ def test_equity_xsec_features_match_formulas():
 
     expected_corr_mean = _expected_corr_mean(ret_panel, 20)
     assert last_rows["AAA"]["corr_mean_20d"] == pytest.approx(expected_corr_mean)
+    assert last_rows["AAA"]["corr_spike_20d"] == pytest.approx(0.0)
+
+    positives = sum(1 for value in ret_values if value > 0)
+    negatives = sum(1 for value in ret_values if value < 0)
+    assert last_rows["AAA"]["breadth_up_1d"] == pytest.approx(positives / len(ret_values))
+    assert last_rows["AAA"]["breadth_down_1d"] == pytest.approx(negatives / len(ret_values))

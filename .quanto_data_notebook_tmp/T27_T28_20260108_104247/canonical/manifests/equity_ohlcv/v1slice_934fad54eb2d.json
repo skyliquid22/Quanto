@@ -1,0 +1,179 @@
+{
+  "creation_timestamp": "2020-01-20T21:37:43+00:00",
+  "domain": "equity_ohlcv",
+  "end_date": "2023-01-05",
+  "inputs": [
+    {
+      "domain": "equity_ohlcv",
+      "file_hash": "sha256:a71c42858c37cbd9420c58936fa6aeeb885e1d7a7e8ec3ce354d1b3aaccd5572",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/AAPL/daily/2023/01/03.parquet",
+      "record_count": 1,
+      "vendor": "polygon"
+    },
+    {
+      "domain": "equity_ohlcv",
+      "file_hash": "sha256:64d3d65d79dbea0d621d7c9f2a317aa50986806c5d44e69b30c3d57a00abf3be",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/AAPL/daily/2023/01/05.parquet",
+      "record_count": 1,
+      "vendor": "polygon"
+    },
+    {
+      "domain": "equity_ohlcv",
+      "file_hash": "sha256:095bfb1611cbfeaaf562fb80a0d043109cfaf63bb9f3e22cc8087cbc6ed75491",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/AAPL/daily/2023/01/04.parquet",
+      "record_count": 1,
+      "vendor": "polygon"
+    },
+    {
+      "domain": "equity_ohlcv",
+      "file_hash": "sha256:d56bae693d4851823350406e4e7e5584bf5397327649fed2f64cf55490ff9ab6",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/MSFT/daily/2023/01/03.parquet",
+      "record_count": 1,
+      "vendor": "polygon"
+    },
+    {
+      "domain": "equity_ohlcv",
+      "file_hash": "sha256:3a4fdd0eefedc64955e4f6f00cfeeeb2bc64e25d7305c92cdaf3f65a41714b7b",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/MSFT/daily/2023/01/05.parquet",
+      "record_count": 1,
+      "vendor": "polygon"
+    },
+    {
+      "domain": "equity_ohlcv",
+      "file_hash": "sha256:f9a0ea54909dd25ef396d3efceba16265045b05fb8e222805f39c38ccc147adc",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/MSFT/daily/2023/01/04.parquet",
+      "record_count": 1,
+      "vendor": "polygon"
+    }
+  ],
+  "lineage": {
+    "domain": "equity_ohlcv",
+    "inputs": [
+      {
+        "domain": "equity_ohlcv",
+        "file_hash": "sha256:a71c42858c37cbd9420c58936fa6aeeb885e1d7a7e8ec3ce354d1b3aaccd5572",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/AAPL/daily/2023/01/03.parquet",
+        "record_count": 1,
+        "vendor": "polygon"
+      },
+      {
+        "domain": "equity_ohlcv",
+        "file_hash": "sha256:64d3d65d79dbea0d621d7c9f2a317aa50986806c5d44e69b30c3d57a00abf3be",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/AAPL/daily/2023/01/05.parquet",
+        "record_count": 1,
+        "vendor": "polygon"
+      },
+      {
+        "domain": "equity_ohlcv",
+        "file_hash": "sha256:095bfb1611cbfeaaf562fb80a0d043109cfaf63bb9f3e22cc8087cbc6ed75491",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/AAPL/daily/2023/01/04.parquet",
+        "record_count": 1,
+        "vendor": "polygon"
+      },
+      {
+        "domain": "equity_ohlcv",
+        "file_hash": "sha256:d56bae693d4851823350406e4e7e5584bf5397327649fed2f64cf55490ff9ab6",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/MSFT/daily/2023/01/03.parquet",
+        "record_count": 1,
+        "vendor": "polygon"
+      },
+      {
+        "domain": "equity_ohlcv",
+        "file_hash": "sha256:3a4fdd0eefedc64955e4f6f00cfeeeb2bc64e25d7305c92cdaf3f65a41714b7b",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/MSFT/daily/2023/01/05.parquet",
+        "record_count": 1,
+        "vendor": "polygon"
+      },
+      {
+        "domain": "equity_ohlcv",
+        "file_hash": "sha256:f9a0ea54909dd25ef396d3efceba16265045b05fb8e222805f39c38ccc147adc",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/MSFT/daily/2023/01/04.parquet",
+        "record_count": 1,
+        "vendor": "polygon"
+      }
+    ],
+    "metadata": {
+      "fallback_records": 0,
+      "manifest_paths": {
+        "polygon": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/manifests/validation/equity_ohlcv/v1slice_17b5513ae7a8.json"
+      },
+      "missing_primary_records": 0
+    },
+    "outputs": [
+      {
+        "file_hash": "sha256:0d1c8c9ee3fc7959a30da9aca7928ad6711b4812801dcdbb7329be65bdd697df",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/AAPL/daily/2023/01/03.parquet",
+        "record_count": 1
+      },
+      {
+        "file_hash": "sha256:f0786358c1f4fcbd16651fd5193223bc0e862c074d59228a37c6782f8eabdf2c",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/AAPL/daily/2023/01/04.parquet",
+        "record_count": 1
+      },
+      {
+        "file_hash": "sha256:aecce01840fdb63b9581395c98f6ce543fe9b0dfa8d8e227e103d1e1d28de268",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/AAPL/daily/2023/01/05.parquet",
+        "record_count": 1
+      },
+      {
+        "file_hash": "sha256:673b3260f0ec820f3d96aa7525904e38fbba4e036b5ced530ee704ff4fc11327",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/MSFT/daily/2023/01/03.parquet",
+        "record_count": 1
+      },
+      {
+        "file_hash": "sha256:712bcff77fd80586883d47e43bcc80d3cda8092d895d88570dfda15e0114aa21",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/MSFT/daily/2023/01/04.parquet",
+        "record_count": 1
+      },
+      {
+        "file_hash": "sha256:458fa3a782425dc19105ebf0d07dad2256c9ad13d2f2456a586c1d7b76d81dde",
+        "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/MSFT/daily/2023/01/05.parquet",
+        "record_count": 1
+      }
+    ],
+    "run_id": "v1slice_934fad54eb2d"
+  },
+  "metrics_path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/monitoring/metrics/reconciliation/equity_ohlcv_v1slice_934fad54eb2d.json",
+  "outputs": [
+    {
+      "file_hash": "sha256:0d1c8c9ee3fc7959a30da9aca7928ad6711b4812801dcdbb7329be65bdd697df",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/AAPL/daily/2023/01/03.parquet",
+      "records": 1
+    },
+    {
+      "file_hash": "sha256:f0786358c1f4fcbd16651fd5193223bc0e862c074d59228a37c6782f8eabdf2c",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/AAPL/daily/2023/01/04.parquet",
+      "records": 1
+    },
+    {
+      "file_hash": "sha256:aecce01840fdb63b9581395c98f6ce543fe9b0dfa8d8e227e103d1e1d28de268",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/AAPL/daily/2023/01/05.parquet",
+      "records": 1
+    },
+    {
+      "file_hash": "sha256:673b3260f0ec820f3d96aa7525904e38fbba4e036b5ced530ee704ff4fc11327",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/MSFT/daily/2023/01/03.parquet",
+      "records": 1
+    },
+    {
+      "file_hash": "sha256:712bcff77fd80586883d47e43bcc80d3cda8092d895d88570dfda15e0114aa21",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/MSFT/daily/2023/01/04.parquet",
+      "records": 1
+    },
+    {
+      "file_hash": "sha256:458fa3a782425dc19105ebf0d07dad2256c9ad13d2f2456a586c1d7b76d81dde",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/equity_ohlcv/MSFT/daily/2023/01/05.parquet",
+      "records": 1
+    }
+  ],
+  "records_written": 6,
+  "run_id": "v1slice_934fad54eb2d",
+  "start_date": "2023-01-03",
+  "vendor_priority": [
+    "polygon",
+    "iex"
+  ],
+  "vendor_usage": {
+    "polygon": 6
+  }
+}

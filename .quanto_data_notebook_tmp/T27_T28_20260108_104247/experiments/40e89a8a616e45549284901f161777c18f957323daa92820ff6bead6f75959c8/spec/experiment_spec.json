@@ -1,0 +1,1 @@
+{"cost_config":{"transaction_cost_bp":0.0},"end_date":"2023-06-30","experiment_name":"notebook_smoke_test","feature_set":"sma_v1","interval":"daily","notes":"Notebook validation run","policy":"equal_weight","policy_params":{},"seed":0,"start_date":"2023-01-01","symbols":["AAPL","MSFT"]}

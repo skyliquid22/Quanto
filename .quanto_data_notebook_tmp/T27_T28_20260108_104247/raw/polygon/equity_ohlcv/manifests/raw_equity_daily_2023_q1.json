@@ -1,0 +1,26 @@
+{
+  "created_at": "2020-04-08T05:29:59+00:00",
+  "end_date": "2023-03-31",
+  "failures": [],
+  "files_written": [
+    {
+      "hash": "sha256:d1184b0c4c4b49ec4b229b4915398328ab1aeb03396e46d950d0219c843ca277",
+      "path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/AAPL/daily/2023.parquet",
+      "records": 62
+    }
+  ],
+  "mode": "rest",
+  "record_counts": {
+    "requested": 62,
+    "validated": 62
+  },
+  "run_id": "raw_equity_daily_2023_q1",
+  "source_files": [],
+  "start_date": "2023-01-01",
+  "status": "succeeded",
+  "symbols": [
+    "AAPL"
+  ],
+  "validation_manifest": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/raw/polygon/equity_ohlcv/manifests/validation/equity_ohlcv/raw_equity_daily_2023_q1.json",
+  "vendor": "polygon"
+}

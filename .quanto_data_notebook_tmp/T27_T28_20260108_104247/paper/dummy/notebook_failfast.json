@@ -1,0 +1,1 @@
+{"experiment_id": "dummy", "execution_mode": "alpaca_paper", "universe": ["AAPL", "MSFT"], "broker": {"alpaca_base_url": "https://paper-api.alpaca.markets"}}

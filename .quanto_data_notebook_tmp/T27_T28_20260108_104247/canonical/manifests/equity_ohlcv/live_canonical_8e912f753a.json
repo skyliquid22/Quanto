@@ -1,0 +1,22 @@
+{
+  "creation_timestamp": "2026-01-06T19:42:15.382800+00:00",
+  "domain": "equity_ohlcv",
+  "end_date": "2023-03-31",
+  "inputs": [],
+  "lineage": {
+    "domain": "equity_ohlcv",
+    "inputs": [],
+    "outputs": [],
+    "run_id": "live_canonical_8e912f753a"
+  },
+  "metrics_path": "/Users/ahmed/PycharmProjects/Quanto/.quanto_data/canonical/metrics/equity_ohlcv_live_canonical_8e912f753a.json",
+  "outputs": [],
+  "records_written": 0,
+  "run_id": "live_canonical_8e912f753a",
+  "start_date": "2023-01-01",
+  "vendor_priority": [
+    "polygon",
+    "iex"
+  ],
+  "vendor_usage": {}
+}

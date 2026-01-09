@@ -72,3 +72,17 @@ def test_invalid_dimension_path_rejected():
     with pytest.raises(ValueError) as excinfo:
         SweepSpec.from_mapping(sweep_payload)
     assert "nonexistent.field" in str(excinfo.value)
+
+
+def test_seed_grid_expands_linear_sequence():
+    base_spec = ExperimentSpec.from_mapping(_base_spec_payload())
+    sweep_payload = {
+        "sweep_name": "seed_grid",
+        "base_experiment_spec": base_spec.to_dict(),
+        "sweep_dimensions": {
+            "seed": {"grid": {"start": 0, "count": 3, "step": 2}},
+        },
+    }
+    sweep_spec = SweepSpec.from_mapping(sweep_payload)
+    expansions = expand_sweep(sweep_spec)
+    assert [spec.seed for spec in expansions] == [0, 2, 4]

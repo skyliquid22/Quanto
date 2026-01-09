@@ -28,6 +28,8 @@ def test_metric_bundle_expected_values():
     assert result.performance["cagr"] is None
     assert result.trading["turnover_1d_mean"] == 0.333333
     assert result.trading["turnover_1d_median"] == 0.4
+    assert result.trading["turnover_1d_std"] >= 0.0
+    assert result.trading["turnover_1d_p95"] >= result.trading["turnover_1d_median"]
     assert result.trading["avg_exposure"] == 1.0
     assert result.trading["max_concentration"] == 0.6
     assert result.trading["hhi_mean"] == 0.53
@@ -41,6 +43,10 @@ def test_metric_bundle_expected_values():
     assert result.safety["exposure_violation_count"] == 0.0
     assert result.safety["turnover_violation_count"] == 0.0
     assert result.returns == [0.1, -0.045455, 0.142857]
+    assert "cost_sensitivity_curve" in result.trading
+    assert result.stability is not None
+    assert result.stability["mode_churn_rate"] == 0.0
+    assert result.stability["cost_curve_span"] >= 0.0
 
 
 def test_metric_bundle_nan_detection():

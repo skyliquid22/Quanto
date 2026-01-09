@@ -12,6 +12,32 @@ try:  # pragma: no cover - stable_baselines3 is optional
 except Exception:  # pragma: no cover - training should fail fast later
     PPO = None  # type: ignore[assignment]
 
+try:  # pragma: no cover - gym/gymnasium optional depending on env
+    import gymnasium as _gym_api  # type: ignore
+except Exception:  # pragma: no cover
+    try:
+        import gym as _gym_api  # type: ignore
+    except Exception:  # pragma: no cover
+        _gym_api = None
+
+if _gym_api is not None and hasattr(_gym_api, "Wrapper"):
+    _RewardWrapperBase = _gym_api.Wrapper  # type: ignore[assignment]
+else:  # pragma: no cover - fallback shims when gym absent
+
+    class _RewardWrapperBase:  # type: ignore[override]
+        def __init__(self, env) -> None:
+            self.env = env
+            self.observation_space = getattr(env, "observation_space", None)
+            self.action_space = getattr(env, "action_space", None)
+
+        def reset(self, *args, **kwargs):
+            return self.env.reset(*args, **kwargs)
+
+        def step(self, action):
+            return self.env.step(action)
+
+from research.training.reward_registry import RewardFunction, create_reward
+
 
 @dataclass(frozen=True)
 class EvaluationResult:
@@ -24,6 +50,58 @@ class EvaluationResult:
     symbols: Tuple[str, ...]
 
 
+class RewardAdapterEnv(_RewardWrapperBase):
+    """Wrapper that rewrites rewards according to the configured reward version."""
+
+    def __init__(self, env, reward_fn: RewardFunction):
+        super().__init__(env)
+        self._reward_fn = reward_fn
+        self.reward_version = reward_fn.name
+        inner = getattr(env, "inner_env", None)
+        if inner is None and hasattr(env, "env"):
+            inner = getattr(env, "env")
+        self.inner_env = inner or env
+        self._step_index = 0
+
+    def reset(self, *args, **kwargs):
+        self._reward_fn.reset()
+        self._step_index = 0
+        return super().reset(*args, **kwargs)
+
+    def step(self, action):
+        result = super().step(action)
+        shaped = self._apply_reward(result)
+        self._step_index += 1
+        return shaped
+
+    def _apply_reward(self, result):
+        if isinstance(result, tuple) and len(result) == 5:
+            obs, reward, terminated, truncated, info = result
+            shaped_reward, info_payload = self._reshape_reward(reward, info)
+            return obs, shaped_reward, terminated, truncated, info_payload
+        obs, reward, done, info = result
+        shaped_reward, info_payload = self._reshape_reward(reward, info)
+        return obs, shaped_reward, done, info_payload
+
+    def _reshape_reward(self, reward: float, info: Mapping[str, Any]):
+        info_dict = dict(info or {})
+        shaped_reward, components = self._reward_fn.compute(
+            base_reward=float(reward),
+            info=info_dict,
+            step_index=self._step_index,
+        )
+        info_dict["reward_version"] = self.reward_version
+        info_dict["base_reward"] = float(reward)
+        info_dict["reward_components"] = components
+        return float(shaped_reward), info_dict
+
+    def __getattr__(self, item: str):
+        return getattr(self.env, item)
+
+
+DEFAULT_REWARD_VERSION = "reward_v1"
+
+
 def train_ppo(
     env,
     *,
@@ -32,16 +110,21 @@ def train_ppo(
     learning_rate: float | None = None,
     policy: str = "MlpPolicy",
     policy_kwargs: Mapping[str, Any] | None = None,
+    reward_version: str | None = DEFAULT_REWARD_VERSION,
     **ppo_kwargs: Any,
 ):
     """Train PPO using stable-baselines3 when available."""
 
     if PPO is None:  # pragma: no cover - exercised in orchestration tests
         raise RuntimeError("stable_baselines3 is required for PPO training")
+    wrapped_env = env
+    if reward_version:
+        reward_fn = create_reward(reward_version)
+        wrapped_env = RewardAdapterEnv(env, reward_fn)
     kwargs = dict(ppo_kwargs)
     if learning_rate is not None:
         kwargs["learning_rate"] = learning_rate
-    model = PPO(policy, env, seed=seed, policy_kwargs=policy_kwargs, verbose=0, **kwargs)
+    model = PPO(policy, wrapped_env, seed=seed, policy_kwargs=policy_kwargs, verbose=0, **kwargs)
     model.learn(total_timesteps=total_timesteps)
     return model
 
