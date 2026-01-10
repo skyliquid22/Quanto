@@ -27,19 +27,17 @@ from research.datasets.canonical_equity_loader import build_union_calendar, load
 from research.eval.evaluate import EvalSeries, EvaluationMetadata, MetricConfig, evaluation_payload, from_rollout
 from research.envs.gym_weight_env import GymWeightTradingEnv
 from research.envs.signal_weight_env import SignalWeightEnvConfig, SignalWeightTradingEnv
-from research.features.feature_eng import build_universe_feature_results
+from research.features.feature_eng import build_sma_feature_result, build_universe_feature_results
 from research.features.feature_registry import (
     FeatureSetResult,
-    build_features,
     build_universe_feature_panel,
     default_regime_for_feature_set,
     is_universe_feature_set,
     normalize_feature_set_name,
-    strategy_to_feature_frame,
 )
 from research.policies.sma_weight_policy import SMAWeightPolicy, SMAWeightPolicyConfig
 from research.runners.rollout import run_rollout
-from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossover
+from research.strategies.sma_crossover import SMAStrategyConfig
 from research.training.ppo_trainer import EvaluationResult, evaluate as ppo_evaluate
 from research.risk import RiskConfig
 from scripts.run_sma_finrl_rollout import ensure_yearly_daily_coverage
@@ -93,7 +91,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--symbols",
         action="append",
-        help="Universe mode symbols (comma-separated and repeatable).",
+        help="Universe symbols (comma separated, repeat flag to supply more).",
     )
     parser.add_argument("--start-date", required=True, help="Inclusive start date (YYYY-MM-DD).")
     parser.add_argument("--end-date", required=True, help="Inclusive end date (YYYY-MM-DD).")
@@ -296,6 +294,8 @@ def _run_policy_rollout(
         transaction_costs=result.transaction_costs,
         symbols=result.symbols,
         rollout_metadata=result.metadata,
+        regime_features=result.regime_features,
+        regime_feature_names=result.regime_feature_names,
     )
     return policy_id, details, series, result.inputs_used
 
@@ -373,14 +373,11 @@ def _build_feature_rows(
     else:
         for symbol in symbols:
             slice_data = slices[symbol]
-            strategy = run_sma_crossover(symbol, slice_data.timestamps, slice_data.closes, sma_config)
-            frame = strategy_to_feature_frame(strategy)
-            if len(frame) < 2:
-                raise SystemExit(f"Not enough SMA rows to build features for {symbol}")
-            feature_result = build_features(
-                args.feature_set,
-                frame,
-                underlying_symbol=symbol,
+            feature_result = build_sma_feature_result(
+                slice_data,
+                fast_window=sma_config.fast_window,
+                slow_window=sma_config.slow_window,
+                feature_set=args.feature_set,
                 start_date=start,
                 end_date=end,
                 data_root=data_root,

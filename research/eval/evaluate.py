@@ -133,6 +133,14 @@ def _series_section(series: EvalSeries, metrics: MetricResult) -> Dict[str, Any]
     }
     if series.modes:
         payload["modes"] = list(series.modes)
+    if series.regime_features and series.regime_feature_names:
+        payload["regime"] = {
+            "feature_names": list(series.regime_feature_names),
+            "values": [
+                [float(value) for value in snapshot]
+                for snapshot in series.regime_features
+            ],
+        }
     return payload
 
 

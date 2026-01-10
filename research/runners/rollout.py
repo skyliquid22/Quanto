@@ -24,6 +24,8 @@ class RolloutResult:
     symbols: Tuple[str, ...]
     transaction_costs: List[float]
     metadata: Dict[str, object]
+    regime_features: List[Tuple[float, ...]]
+    regime_feature_names: Tuple[str, ...]
 
 
 def run_rollout(
@@ -42,6 +44,8 @@ def run_rollout(
     log_returns: List[float] = []
     logs: List[Dict[str, object]] = []
     transaction_costs: List[float] = []
+    regime_feature_names: Tuple[str, ...] = tuple(getattr(env, "_regime_feature_columns", ()) or ())
+    regime_series: List[Tuple[float, ...]] = []
 
     done = False
     while not done:
@@ -65,6 +69,10 @@ def run_rollout(
         }
         logs.append(log_entry)
         transaction_costs.append(float(info["cost_paid"]))
+        if regime_feature_names:
+            raw_regime = info.get("regime_features") or [0.0] * len(regime_feature_names)
+            snapshot = tuple(float(raw_regime[idx]) if idx < len(raw_regime) else 0.0 for idx in range(len(regime_feature_names)))
+            regime_series.append(snapshot)
         account_values.append(float(info["portfolio_value"]))
         weights.append(realized_weights)
         next_timestamp = env.current_row["timestamp"].isoformat()  # type: ignore[index]
@@ -84,6 +92,8 @@ def run_rollout(
         symbols=symbol_order,
         transaction_costs=transaction_costs,
         metadata=metadata_payload,
+        regime_features=regime_series,
+        regime_feature_names=regime_feature_names,
     )
 
 
