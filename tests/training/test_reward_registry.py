@@ -90,6 +90,7 @@ def test_reward_adapter_penalizes_turnover():
     env = _DummyEnv()
     adapter = RewardAdapterEnv(env, create_reward("reward_v2"))
     adapter.reset()
+    adapter.step(0.2)  # warmup to establish last weights
     result = adapter.step(0.8)
     if isinstance(result, tuple) and len(result) == 5:
         _, shaped_reward, _, _, info = result
