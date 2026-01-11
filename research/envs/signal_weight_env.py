@@ -207,18 +207,21 @@ class SignalWeightTradingEnv:
                 if value is None:
                     raise ValueError(f"Row missing required observation column '{column}' for symbol '{symbol}'")
                 values.append(float(value))
-            if regime_values:
-                values.extend(regime_values)
+        if regime_values:
+            values.extend(regime_values)
         values.extend(self._current_weights)
         return tuple(values)
 
     def _build_observation_headers(self) -> Tuple[str, ...]:
         if self._num_assets == 1:
-            return self._feature_columns + self._regime_feature_columns + ("prev_weight",)
+            headers: List[str] = list(self._feature_columns)
+            headers.extend(f"REGIME:{column}" for column in self._regime_feature_columns)
+            headers.append("prev_weight")
+            return tuple(headers)
         headers: List[str] = []
         for symbol in self._symbol_order:
             headers.extend(f"{symbol}:{column}" for column in self._feature_columns)
-            headers.extend(f"{symbol}:{column}" for column in self._regime_feature_columns)
+        headers.extend(f"REGIME:{column}" for column in self._regime_feature_columns)
         headers.extend(f"{symbol}:prev_weight" for symbol in self._symbol_order)
         return tuple(headers)
 

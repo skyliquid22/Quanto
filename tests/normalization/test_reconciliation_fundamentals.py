@@ -4,9 +4,13 @@ import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from infra.normalization import ReconciliationBuilder
 from infra.normalization.lineage import compute_file_hash
-from infra.storage.parquet import write_parquet_atomic
+from infra.storage.parquet import _PARQUET_AVAILABLE, write_parquet_atomic
+
+pytestmark = pytest.mark.skipif(not _PARQUET_AVAILABLE, reason="pyarrow is required for reconciliation tests")
 
 UTC = timezone.utc
 
@@ -62,7 +66,6 @@ def test_fundamentals_respects_record_vendor_and_restatements(tmp_path):
             },
         ],
         factset_aapl,
-        use_pyarrow=False,
     )
     write_parquet_atomic(
         [
@@ -76,7 +79,6 @@ def test_fundamentals_respects_record_vendor_and_restatements(tmp_path):
             }
         ],
         sec_msft,
-        use_pyarrow=False,
     )
 
     _write_manifest(manifest_root, "fundamentals", "factset_run", "factset", file_hashes=[compute_file_hash(factset_aapl)])

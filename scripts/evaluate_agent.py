@@ -328,6 +328,8 @@ def _run_ppo_rollout(
         transaction_costs=costs,
         symbols=eval_result.symbols,
         rollout_metadata=rollout_metadata,
+        regime_features=eval_result.regime_features,
+        regime_feature_names=eval_result.regime_feature_names,
     )
     policy_id = f"ppo_{checkpoint_path.stem}"
     details = {

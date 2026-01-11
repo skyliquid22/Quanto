@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
 import hashlib
-import json
 import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+from uuid import uuid4
 
 try:  # pragma: no cover - optional dependency
     import pyarrow as pa  # type: ignore
@@ -44,19 +43,27 @@ def write_parquet_atomic(
     if filesystem is not None:
         raise NotImplementedError("Custom filesystem backends are not supported in this writer")
 
+    if not use_pyarrow or not _PARQUET_AVAILABLE or pa is None or pq is None:
+        raise RuntimeError("pyarrow is required to write parquet data deterministically")
+
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = destination.with_name(destination.name + ".tmp")
+    tmp_path = destination.with_name(f"{destination.name}.{uuid4().hex}.tmp")
 
     materialized, column_order = _materialize_records(records)
     column_order = _resolve_column_order(column_order, schema)
 
-    if use_pyarrow and _PARQUET_AVAILABLE:
+    try:
         _write_with_pyarrow(materialized, column_order, tmp_path, schema=schema, compression=compression)
-    else:
-        _write_json_fallback(materialized, tmp_path)
+        os.replace(tmp_path, destination)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
 
-    os.replace(tmp_path, destination)
+    _verify_parquet(destination)
+
     bytes_written = destination.stat().st_size
     file_hash = _sha256_file(destination)
     return {"path": str(destination), "file_hash": file_hash, "bytes_written": bytes_written}
@@ -120,9 +127,17 @@ def _write_with_pyarrow(
     )
 
 
-def _write_json_fallback(records: Sequence[Mapping[str, Any]], tmp_path: Path) -> None:
-    payload = json.dumps(records, default=_json_default, sort_keys=True, separators=(",", ":"))
-    tmp_path.write_text(payload, encoding="utf-8")
+def _verify_parquet(path: Path) -> None:
+    if not _PARQUET_AVAILABLE or pq is None:  # pragma: no cover - guard
+        raise RuntimeError("pyarrow is required for parquet verification")
+    try:
+        pq.read_table(path)
+    except Exception as exc:  # pragma: no cover - verification should rarely fail
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        raise RuntimeError(f"Parquet verification failed for {path}: {exc}") from exc
 
 
 def _sha256_file(path: Path) -> str:
@@ -131,14 +146,6 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(65536), b""):
             digest.update(chunk)
     return f"sha256:{digest.hexdigest()}"
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-    raise TypeError(f"Unsupported type {type(value)} during serialization")
 
 
 __all__ = ["write_parquet_atomic", "_PARQUET_AVAILABLE"]

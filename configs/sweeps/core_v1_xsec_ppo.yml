@@ -1,6 +1,7 @@
-sweep_name: core_v1_ppo
+sweep_name: core_v1_xsec_ppo
+
 base_experiment_spec:
-  experiment_name: core_v1_ppo
+  experiment_name: core_v1_xsec_ppo
   symbols: [
       "AAPL", "MSFT", "NVDA", "AVGO", "ORCL",
       "ADBE", "CRM", "AMD", "CSCO", "QCOM",
@@ -10,7 +11,10 @@ base_experiment_spec:
   start_date: "2023-01-01"
   end_date: "2023-06-30"
   interval: "daily"
+
+  # baseline; overridden by sweep
   feature_set: "core_v1"
+
   policy: "ppo"
   policy_params:
     fast_window: 20
@@ -20,17 +24,23 @@ base_experiment_spec:
     batch_size: 256
     learning_rate: 0.0003
     gamma: 0.99
+
   cost_config:
     transaction_cost_bp: 1.0
+
   risk_config:
     long_only: true
     max_weight: 0.6
     exposure_cap: 1.0
     min_cash: 0.0
     max_turnover_1d: 0.4
+
   seed: 42
-  notes: "core_v1 vs core_v1_regime (ppo)"
+  notes: "PPO 2x2: core vs xsec vs regime"
+
 sweep_dimensions:
   feature_set:
     - "core_v1"
     - "core_v1_regime"
+    - "core_v1_xsec"
+    - "core_v1_xsec_regime"

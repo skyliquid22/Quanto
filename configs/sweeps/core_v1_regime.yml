@@ -1,6 +1,6 @@
-sweep_name: core_v1_ppo
-base_experiment_spec:
-  experiment_name: core_v1_ppo
+sweep_name: core_v1_regime_smoke
+base_spec:
+  experiment_name: core_v1_sweep
   symbols: [
       "AAPL", "MSFT", "NVDA", "AVGO", "ORCL",
       "ADBE", "CRM", "AMD", "CSCO", "QCOM",
@@ -11,15 +11,8 @@ base_experiment_spec:
   end_date: "2023-06-30"
   interval: "daily"
   feature_set: "core_v1"
-  policy: "ppo"
-  policy_params:
-    fast_window: 20
-    slow_window: 50
-    timesteps: 20000
-    n_steps: 2048
-    batch_size: 256
-    learning_rate: 0.0003
-    gamma: 0.99
+  policy: "equal_weight"
+  policy_params: {}
   cost_config:
     transaction_cost_bp: 1.0
   risk_config:
@@ -29,8 +22,9 @@ base_experiment_spec:
     min_cash: 0.0
     max_turnover_1d: 0.4
   seed: 42
-  notes: "core_v1 vs core_v1_regime (ppo)"
-sweep_dimensions:
-  feature_set:
-    - "core_v1"
-    - "core_v1_regime"
+  notes: "core_v1 regime smoke sweep"
+dimensions:
+  - field_path: policy
+    values: ["equal_weight", "ppo"]
+  - field_path: feature_set
+    values: ["core_v1", "core_v1_regime"]

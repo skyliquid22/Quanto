@@ -15,6 +15,9 @@ from infra.ingestion.adapters import OptionReferenceIngestionRequest, OptionTime
 from infra.ingestion.options_pipeline import OptionPartition, OptionsIngestionPipeline, OptionsIngestionPlan
 from infra.storage.raw_writer import RawOptionsWriter
 from infra.validation import ValidationError
+from infra.storage.parquet import _PARQUET_AVAILABLE
+
+pytestmark = pytest.mark.skipif(not _PARQUET_AVAILABLE, reason="pyarrow is required for options ingestion tests")
 
 
 class _DeterministicOptionsRestClient:
@@ -114,8 +117,7 @@ def _build_pipeline(tmp_path: Path, client: _DeterministicOptionsRestClient) -> 
     )
 
 
-def test_options_pipeline_end_to_end_with_checkpoint_resume(tmp_path, monkeypatch):
-    monkeypatch.setattr("infra.storage.parquet._PARQUET_AVAILABLE", False)
+def test_options_pipeline_end_to_end_with_checkpoint_resume(tmp_path):
     plan = _build_plan()
     client = _DeterministicOptionsRestClient()
     pipeline = _build_pipeline(tmp_path, client)
@@ -169,8 +171,7 @@ def test_options_pipeline_end_to_end_with_checkpoint_resume(tmp_path, monkeypatc
         assert manifest_path.exists()
 
 
-def test_options_pipeline_records_failure(tmp_path, monkeypatch):
-    monkeypatch.setattr("infra.storage.parquet._PARQUET_AVAILABLE", False)
+def test_options_pipeline_records_failure(tmp_path):
     plan = _build_plan()
     client = _DeterministicOptionsRestClient(negative_oi=True)
     pipeline = _build_pipeline(tmp_path, client)

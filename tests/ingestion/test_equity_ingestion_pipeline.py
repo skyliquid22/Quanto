@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 import sys
 
+import pyarrow.parquet as pq
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -15,6 +16,9 @@ from infra.ingestion.adapters import EquityIngestionRequest, PolygonEquityAdapte
 from infra.ingestion.data_pipeline import EquityIngestionPipeline
 from infra.ingestion.router import IngestionRouter
 from infra.storage.raw_writer import RawEquityOHLCVWriter
+from infra.storage.parquet import _PARQUET_AVAILABLE
+
+pytestmark = pytest.mark.skipif(not _PARQUET_AVAILABLE, reason="pyarrow is required for ingestion pipeline tests")
 
 
 class _StubRestClient:
@@ -33,16 +37,13 @@ def _build_request():
     )
 
 
-def test_pipeline_rest_flow_writes_raw_layout(tmp_path, monkeypatch):
+def test_pipeline_rest_flow_writes_raw_layout(tmp_path):
     rest_payload = {"results": [{"t": 1704067200000, "o": 1.0, "h": 2.0, "l": 1.0, "c": 2.0, "v": 10.0}], "next_url": None}
     adapter = PolygonEquityAdapter(rest_client=_StubRestClient(rest_payload))
     router = IngestionRouter({"force_mode": "rest"})
     raw_root = tmp_path / "raw"
     manifest_dir = tmp_path / "manifests"
     writer = RawEquityOHLCVWriter(base_path=raw_root)
-
-    # Force JSON fallback for deterministic hashing in tests.
-    monkeypatch.setattr("infra.storage.parquet._PARQUET_AVAILABLE", False)
 
     pipeline = EquityIngestionPipeline(adapter=adapter, router=router, raw_writer=writer, manifest_dir=manifest_dir)
     request = _build_request()
@@ -55,7 +56,7 @@ def test_pipeline_rest_flow_writes_raw_layout(tmp_path, monkeypatch):
     stored_manifest = json.loads(manifest_path.read_text())
     assert stored_manifest["files_written"]
 
-    data_file = raw_root / "polygon" / "equity_ohlcv" / "AAPL" / "daily" / "2024" / "01" / "01.parquet"
+    data_file = raw_root / "polygon" / "equity_ohlcv" / "AAPL" / "daily" / "2024.parquet"
     assert data_file.exists()
 
     # Re-run with the same configuration to verify determinism.
@@ -63,8 +64,7 @@ def test_pipeline_rest_flow_writes_raw_layout(tmp_path, monkeypatch):
     assert manifest2 == manifest
 
 
-def test_raw_writer_idempotent(tmp_path, monkeypatch):
-    monkeypatch.setattr("infra.storage.parquet._PARQUET_AVAILABLE", False)
+def test_raw_writer_idempotent(tmp_path):
     writer = RawEquityOHLCVWriter(base_path=tmp_path / "raw")
     records = [
         {
@@ -80,7 +80,8 @@ def test_raw_writer_idempotent(tmp_path, monkeypatch):
     ]
 
     writer.write_records("polygon", records)
-    data_file = tmp_path / "raw" / "polygon" / "equity_ohlcv" / "AAPL" / "daily" / "2024" / "01" / "01.parquet"
-    initial_bytes = data_file.read_bytes()
+    data_file = tmp_path / "raw" / "polygon" / "equity_ohlcv" / "AAPL" / "daily" / "2024.parquet"
+    first_rows = pq.read_table(data_file).to_pylist()
     writer.write_records("polygon", records)
-    assert data_file.read_bytes() == initial_bytes
+    second_rows = pq.read_table(data_file).to_pylist()
+    assert second_rows == first_rows

@@ -73,7 +73,8 @@ async def _amain(args: argparse.Namespace) -> int:
     manifest_dir_cfg = config.get("manifest_dir")
     default_manifest_dir = raw_base / request.vendor / "equity_ohlcv" / "manifests"
     manifest_dir = Path(manifest_dir_cfg).expanduser() if manifest_dir_cfg else default_manifest_dir
-    raw_writer = RawEquityOHLCVWriter(base_path=raw_base)
+    shard_yearly = config.get("raw_shard_yearly_daily")
+    raw_writer = RawEquityOHLCVWriter(base_path=raw_base, shard_yearly_daily=shard_yearly if shard_yearly is not None else None)
 
     forced_mode = None if args.mode == "auto" else args.mode
     rest_cfg = dict(config.get("rest", {}))

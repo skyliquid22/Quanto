@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
 import numpy as np
@@ -37,6 +37,7 @@ else:  # pragma: no cover - fallback shims when gym absent
             return self.env.step(action)
 
 from research.training.reward_registry import RewardFunction, create_reward
+from research.regime import RegimeState
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,8 @@ class EvaluationResult:
     log_returns: list[float]
     steps: list[Dict[str, object]]
     symbols: Tuple[str, ...]
+    regime_features: list[Tuple[float, ...]] = field(default_factory=list)
+    regime_feature_names: Tuple[str, ...] = field(default_factory=tuple)
 
 
 class RewardAdapterEnv(_RewardWrapperBase):
@@ -143,6 +146,8 @@ def evaluate(model, env) -> EvaluationResult:
     weights = [_weights_dict(inner_env.current_weights, symbol_order)]
     log_returns: list[float] = []
     steps: list[Dict[str, object]] = []
+    regime_series: list[Tuple[float, ...]] = []
+    regime_feature_names: list[str] = []
     done = False
 
     while not done:
@@ -163,6 +168,14 @@ def evaluate(model, env) -> EvaluationResult:
         }
         steps.append(log_entry)
         log_returns.append(float(reward))
+        regime_snapshot = _extract_regime_snapshot(info)
+        if regime_snapshot:
+            values, names = regime_snapshot
+            if not regime_feature_names and names:
+                regime_feature_names.extend(names)
+            if regime_feature_names:
+                normalized = _normalize_regime_values(values, len(regime_feature_names))
+                regime_series.append(normalized)
         account_values.append(float(log_entry["portfolio_value"]))
         weights.append(realized_weights)
         timeline.append(inner_env.current_row["timestamp"].isoformat())
@@ -176,6 +189,8 @@ def evaluate(model, env) -> EvaluationResult:
         log_returns=log_returns,
         steps=steps,
         symbols=symbol_order,
+        regime_features=regime_series,
+        regime_feature_names=tuple(regime_feature_names),
     )
 
 
@@ -196,6 +211,33 @@ def _step_env(env, action):
     else:
         obs, reward, done, info = result
     return np.asarray(obs, dtype=np.float32), float(reward), bool(done), info
+
+
+def _extract_regime_snapshot(info: Mapping[str, object]) -> Tuple[Sequence[float], Sequence[str]] | None:
+    raw_values = info.get("regime_features")
+    names = info.get("regime_feature_names")
+    state = info.get("regime_state")
+    if (raw_values is None or names is None) and isinstance(state, RegimeState):
+        raw_values = raw_values or state.features
+        names = names or state.feature_names
+    if raw_values is None or names is None:
+        return None
+    normalized_names = [str(name) for name in names if str(name)]
+    if not normalized_names:
+        return None
+    return raw_values, normalized_names
+
+
+def _normalize_regime_values(values: Sequence[float], width: int) -> Tuple[float, ...]:
+    if width <= 0:
+        return tuple()
+    row = [0.0] * width
+    for idx in range(width):
+        try:
+            row[idx] = float(values[idx])
+        except (IndexError, TypeError, ValueError):
+            row[idx] = 0.0
+    return tuple(row)
 
 
 def _compute_metrics(

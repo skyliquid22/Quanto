@@ -11,11 +11,13 @@ if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover - import guard
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from infra.storage.raw_writer import RawEquityOHLCVWriter
+from infra.storage.parquet import _PARQUET_AVAILABLE
+
+pytestmark = pytest.mark.skipif(not _PARQUET_AVAILABLE, reason="pyarrow is required for parquet layout tests")
 
 
 @pytest.mark.parametrize("vendor", ["polygon", "test_vendor"])
-def test_equity_raw_paths_are_vendor_partitioned(tmp_path, monkeypatch, vendor) -> None:
-    monkeypatch.setattr("infra.storage.parquet._PARQUET_AVAILABLE", False)
+def test_equity_raw_paths_are_vendor_partitioned(tmp_path, vendor) -> None:
     base_path = tmp_path / "raw"
     writer = RawEquityOHLCVWriter(base_path=base_path)
     records = [
@@ -40,7 +42,7 @@ def test_equity_raw_paths_are_vendor_partitioned(tmp_path, monkeypatch, vendor) 
     ]
 
     result = writer.write_records(vendor, records)
-    assert result["total_files"] == 2
+    assert result["total_files"] == 1
 
     emitted_paths = [Path(entry["path"]) for entry in result["files"]]
     for path in emitted_paths:
@@ -52,14 +54,11 @@ def _assert_equity_layout(rel_path: Path, vendor: str) -> None:
     parts = rel_path.parts
     assert parts[0] == vendor
     assert parts[1] == "equity_ohlcv"
-    assert len(parts) == 7, f"unexpected layout segments: {parts}"
+    assert len(parts) == 5, f"unexpected layout segments: {parts}"
     symbol = parts[2]
     assert symbol
     assert parts[3] == "daily"
-    year, month = parts[4], parts[5]
-    day_part = parts[6]
+    shard = parts[4]
+    assert shard.endswith(".parquet")
+    year = shard.replace(".parquet", "")
     assert year.isdigit() and len(year) == 4
-    assert month.isdigit() and len(month) == 2
-    assert day_part.endswith(".parquet")
-    day = day_part.replace(".parquet", "")
-    assert day.isdigit() and len(day) == 2

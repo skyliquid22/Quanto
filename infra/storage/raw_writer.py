@@ -35,7 +35,7 @@ class RawEquityOHLCVWriter:
         elif shard_yearly_daily is not None:
             self.shard_yearly_daily = shard_yearly_daily
         else:
-            self.shard_yearly_daily = False
+            self.shard_yearly_daily = True
 
     def write_records(
         self,

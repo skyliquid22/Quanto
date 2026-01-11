@@ -8,6 +8,7 @@ from typing import Dict, List, Mapping, Sequence, Tuple
 
 from research.envs.signal_weight_env import SignalWeightTradingEnv
 from research.policies.sma_weight_policy import SMAWeightPolicy
+from research.regime import RegimeState
 
 ANNUALIZATION_DAYS = 252
 
@@ -24,6 +25,8 @@ class RolloutResult:
     symbols: Tuple[str, ...]
     transaction_costs: List[float]
     metadata: Dict[str, object]
+    regime_features: List[Tuple[float, ...]]
+    regime_feature_names: Tuple[str, ...]
     regime_features: List[Tuple[float, ...]]
     regime_feature_names: Tuple[str, ...]
 
@@ -44,7 +47,7 @@ def run_rollout(
     log_returns: List[float] = []
     logs: List[Dict[str, object]] = []
     transaction_costs: List[float] = []
-    regime_feature_names: Tuple[str, ...] = tuple(getattr(env, "_regime_feature_columns", ()) or ())
+    regime_feature_names: List[str] = list(getattr(env, "_regime_feature_columns", ()) or [])
     regime_series: List[Tuple[float, ...]] = []
 
     done = False
@@ -69,10 +72,7 @@ def run_rollout(
         }
         logs.append(log_entry)
         transaction_costs.append(float(info["cost_paid"]))
-        if regime_feature_names:
-            raw_regime = info.get("regime_features") or [0.0] * len(regime_feature_names)
-            snapshot = tuple(float(raw_regime[idx]) if idx < len(raw_regime) else 0.0 for idx in range(len(regime_feature_names)))
-            regime_series.append(snapshot)
+        _capture_regime_snapshot(info, regime_series, regime_feature_names)
         account_values.append(float(info["portfolio_value"]))
         weights.append(realized_weights)
         next_timestamp = env.current_row["timestamp"].isoformat()  # type: ignore[index]
@@ -93,7 +93,7 @@ def run_rollout(
         transaction_costs=transaction_costs,
         metadata=metadata_payload,
         regime_features=regime_series,
-        regime_feature_names=regime_feature_names,
+        regime_feature_names=tuple(regime_feature_names),
     )
 
 
@@ -202,6 +202,52 @@ def _infer_symbol_order(row: Mapping[str, object]) -> Tuple[str, ...]:
         return tuple(sorted(panel.keys()))
     symbol = str(row.get("symbol") or "asset")
     return (symbol,)
+
+
+def _capture_regime_snapshot(
+    info: Mapping[str, object],
+    series: List[Tuple[float, ...]],
+    name_list: List[str],
+) -> None:
+    if not name_list:
+        inferred = _infer_regime_names_from_info(info)
+        if inferred:
+            name_list.extend(inferred)
+    if not name_list:
+        return
+    width = len(name_list)
+    raw_values = info.get("regime_features")
+    if raw_values is None:
+        state = info.get("regime_state")
+        if isinstance(state, RegimeState):
+            raw_values = state.features
+    normalized = _normalize_regime_values(raw_values, width)
+    series.append(normalized)
+
+
+def _infer_regime_names_from_info(info: Mapping[str, object]) -> List[str]:
+    names = info.get("regime_feature_names")
+    if isinstance(names, Sequence):
+        normalized = [str(name) for name in names if str(name)]
+        if normalized:
+            return normalized
+    state = info.get("regime_state")
+    if isinstance(state, RegimeState):
+        return [str(name) for name in state.feature_names]
+    return []
+
+
+def _normalize_regime_values(values: object, width: int) -> Tuple[float, ...]:
+    if not width:
+        return tuple()
+    row = [0.0] * width
+    if isinstance(values, Sequence):
+        for idx in range(width):
+            try:
+                row[idx] = float(values[idx])
+            except (IndexError, TypeError, ValueError):
+                row[idx] = 0.0
+    return tuple(row)
 
 
 def _normalize_metadata(payload: Mapping[str, object] | None) -> Dict[str, object]:

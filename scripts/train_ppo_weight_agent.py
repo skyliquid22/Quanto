@@ -634,6 +634,11 @@ def build_eval_report(
         "weights": weights_series,
         "log_returns": eval_result.log_returns,
     }
+    if eval_result.regime_features and eval_result.regime_feature_names:
+        series["regime"] = {
+            "feature_names": list(eval_result.regime_feature_names),
+            "values": [list(snapshot) for snapshot in eval_result.regime_features],
+        }
     artifacts = {
         "report": _rel_path(report_path, data_root),
         "plot": _rel_path(plot_path, data_root),

@@ -5,6 +5,7 @@ from datetime import date
 from pathlib import Path
 import sys
 
+import pyarrow.parquet as pq
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +17,9 @@ from infra.ingestion.fundamentals_pipeline import FundamentalsIngestionPipeline
 from infra.ingestion.router import IngestionRouter
 from infra.storage.raw_writer import RawFundamentalsWriter
 from infra.validation import ValidationError
+from infra.storage.parquet import _PARQUET_AVAILABLE
+
+pytestmark = pytest.mark.skipif(not _PARQUET_AVAILABLE, reason="pyarrow is required for fundamentals ingestion tests")
 
 
 class _StubAdapter:
@@ -69,8 +73,7 @@ def _adapter_result(symbol: str, *, restated: bool = False) -> FundamentalsAdapt
     return FundamentalsAdapterResult(records=[_record(symbol, "2023-12-31")], filings=filings, source_payloads=payloads)
 
 
-def test_pipeline_writes_manifests_and_respects_checkpoint(tmp_path, monkeypatch):
-    monkeypatch.setattr("infra.storage.parquet._PARQUET_AVAILABLE", False)
+def test_pipeline_writes_manifests_and_respects_checkpoint(tmp_path):
     raw_base = tmp_path / "raw"
     checkpoints = tmp_path / "checkpoints"
 
@@ -113,8 +116,7 @@ def test_pipeline_writes_manifests_and_respects_checkpoint(tmp_path, monkeypatch
     assert adapter.calls == initial_calls
 
 
-def test_pipeline_validation_failure_emits_manifest(tmp_path, monkeypatch):
-    monkeypatch.setattr("infra.storage.parquet._PARQUET_AVAILABLE", False)
+def test_pipeline_validation_failure_emits_manifest(tmp_path):
     raw_base = tmp_path / "raw"
     adapter = _StubAdapter({
         "AAPL": FundamentalsAdapterResult(
@@ -148,20 +150,19 @@ def test_pipeline_validation_failure_emits_manifest(tmp_path, monkeypatch):
     assert payload["failures"]
 
 
-def test_raw_fundamentals_writer_idempotent(tmp_path, monkeypatch):
-    monkeypatch.setattr("infra.storage.parquet._PARQUET_AVAILABLE", False)
+def test_raw_fundamentals_writer_idempotent(tmp_path):
     writer = RawFundamentalsWriter(base_path=tmp_path / "raw")
     records = [_record("AAPL", "2023-12-31")]
 
     writer.write_records("polygon", records)
     file_path = tmp_path / "raw" / "polygon" / "fundamentals" / "AAPL" / "2023" / "12" / "31.parquet"
-    first_bytes = file_path.read_bytes()
+    first_rows = pq.read_table(file_path).to_pylist()
     writer.write_records("polygon", records)
-    assert file_path.read_bytes() == first_bytes
+    second_rows = pq.read_table(file_path).to_pylist()
+    assert second_rows == first_rows
 
 
-def test_raw_fundamentals_writer_orders_and_groups_by_fiscal_period(tmp_path, monkeypatch):
-    monkeypatch.setattr("infra.storage.parquet._PARQUET_AVAILABLE", False)
+def test_raw_fundamentals_writer_orders_and_groups_by_fiscal_period(tmp_path):
     writer = RawFundamentalsWriter(base_path=tmp_path / "raw")
     records = [
         _record("AAPL", "2023-12-31", fiscal_period="FY23"),
@@ -170,12 +171,11 @@ def test_raw_fundamentals_writer_orders_and_groups_by_fiscal_period(tmp_path, mo
 
     writer.write_records("polygon", records)
     file_path = tmp_path / "raw" / "polygon" / "fundamentals" / "AAPL" / "2023" / "12" / "31.parquet"
-    payload = json.loads(file_path.read_text())
+    payload = pq.read_table(file_path).to_pylist()
     assert [entry["fiscal_period"] for entry in payload] == ["FY22", "FY23"]
 
 
-def test_raw_fundamentals_writer_raises_on_duplicate_keys(tmp_path, monkeypatch):
-    monkeypatch.setattr("infra.storage.parquet._PARQUET_AVAILABLE", False)
+def test_raw_fundamentals_writer_raises_on_duplicate_keys(tmp_path):
     writer = RawFundamentalsWriter(base_path=tmp_path / "raw")
     base_record = _record("AAPL", "2023-12-31", fiscal_period="FY23")
     records = [base_record, {**base_record, "net_income": 12.0}]

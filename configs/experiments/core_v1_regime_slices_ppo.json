@@ -1,0 +1,39 @@
+{
+  "experiment_name": "core_v1_regime_slices_ppo",
+  "symbols": ["AAPL","ACN","ADBE","ADP","AMAT","AMD","AVGO","CRM","CSCO","IBM","INTC","INTU","MSFT","MU","NOW","NVDA","ORCL","PANW","QCOM","TXN"],
+  "start_date": "2023-01-01",
+  "end_date": "2023-06-30",
+  "interval": "daily",
+
+  "feature_set": "core_v1_regime",
+  "regime_feature_set": "regime_v1",
+
+  "policy": "ppo",
+  "policy_params": {
+    "timesteps": 20000,
+    "n_steps": 2048,
+    "batch_size": 256,
+    "learning_rate": 0.0003,
+    "gamma": 0.99,
+    "fast_window": 20,
+    "slow_window": 50
+  },
+
+  "cost_config": { "transaction_cost_bp": 1.0 },
+
+  "risk_config": {
+    "long_only": true,
+    "max_weight": 0.6,
+    "exposure_cap": 1.0,
+    "min_cash": 0.0,
+    "max_turnover_1d": 0.4
+  },
+
+  "hierarchy_enabled": false,
+  "allocator_by_mode": {},
+  "controller_config": {},
+
+  "seed": 42,
+  "notes": "New run: enable regime_feature_set so rollout writes series.regime and run_regime_slices works."
+}
+

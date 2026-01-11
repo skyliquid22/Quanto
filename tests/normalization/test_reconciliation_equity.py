@@ -4,9 +4,13 @@ import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from infra.normalization import ReconciliationBuilder
 from infra.normalization.lineage import compute_file_hash
-from infra.storage.parquet import write_parquet_atomic
+from infra.storage.parquet import _PARQUET_AVAILABLE, write_parquet_atomic
+
+pytestmark = pytest.mark.skipif(not _PARQUET_AVAILABLE, reason="pyarrow is required for reconciliation tests")
 
 
 UTC = timezone.utc
@@ -57,7 +61,6 @@ def test_equity_reconciliation_prefers_primary_with_fallback(tmp_path):
             }
         ],
         polygon_path,
-        use_pyarrow=False,
     )
     write_parquet_atomic(
         [
@@ -72,7 +75,6 @@ def test_equity_reconciliation_prefers_primary_with_fallback(tmp_path):
             }
         ],
         iex_aapl,
-        use_pyarrow=False,
     )
     write_parquet_atomic(
         [
@@ -87,7 +89,6 @@ def test_equity_reconciliation_prefers_primary_with_fallback(tmp_path):
             }
         ],
         iex_msft,
-        use_pyarrow=False,
     )
 
     _write_manifest(manifest_root, "equity_ohlcv", "polygon_run", "polygon", file_hashes=[compute_file_hash(polygon_path)])
@@ -161,7 +162,7 @@ def test_equity_reconciliation_handles_yearly_raw_shards(tmp_path):
                 "volume": 1000 + day,
             }
         )
-    write_parquet_atomic(records, yearly_path, use_pyarrow=False)
+    write_parquet_atomic(records, yearly_path)
     file_hash = compute_file_hash(yearly_path)
     ingest_manifest_dir = raw_root / "polygon" / "equity_ohlcv" / "manifests"
     ingest_manifest_dir.mkdir(parents=True, exist_ok=True)

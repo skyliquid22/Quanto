@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Sequence, Tuple
+import logging
 
 import numpy as np
 
@@ -28,11 +29,45 @@ from research.strategies.sma_crossover import SMAStrategyResult
 from research.features.core_features_v1 import CORE_V1_OBSERVATION_COLUMNS, compute_core_features_v1
 
 
+LOGGER = logging.getLogger(__name__)
+
 SMA_OBSERVATION_COLUMNS = ("close", "sma_fast", "sma_slow", "sma_diff", "sma_signal")
 OPTIONS_OBSERVATION_COLUMNS = ("close",) + OPTION_FEATURE_COLUMNS
 SMA_PLUS_OPTIONS_COLUMNS = SMA_OBSERVATION_COLUMNS + tuple(name for name in OPTION_FEATURE_COLUMNS)
 SMA_PLUS_XSEC_OBSERVATION_COLUMNS = SMA_OBSERVATION_COLUMNS + tuple(
     column for column in EQUITY_XSEC_OBSERVATION_COLUMNS if column != "close"
+)
+
+
+def _merge_observation_columns(
+    primary: Sequence[str], secondary: Sequence[str], *, warning_label: str | None = None
+) -> Tuple[str, ...]:
+    seen: set[str] = set()
+    combined: List[str] = []
+    duplicates: List[str] = []
+    for column in primary:
+        if column not in seen:
+            combined.append(column)
+            seen.add(column)
+    for column in secondary:
+        if column in seen:
+            duplicates.append(column)
+            continue
+        combined.append(column)
+        seen.add(column)
+    if duplicates and warning_label:
+        LOGGER.warning(
+            "%s dropping duplicate columns from secondary feature set: %s",
+            warning_label,
+            ", ".join(sorted(set(duplicates))),
+        )
+    return tuple(combined)
+
+
+CORE_V1_XSEC_OBSERVATION_COLUMNS = _merge_observation_columns(
+    CORE_V1_OBSERVATION_COLUMNS,
+    tuple(column for column in EQUITY_XSEC_OBSERVATION_COLUMNS if column != "close"),
+    warning_label="core_v1_xsec",
 )
 
 
@@ -69,6 +104,8 @@ _UNIVERSE_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "sma_plus_regime_v1": SMA_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
     "xsec_plus_regime_v1": EQUITY_XSEC_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
     "core_v1_regime": CORE_V1_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
+    "core_v1_xsec": CORE_V1_XSEC_OBSERVATION_COLUMNS,
+    "core_v1_xsec_regime": CORE_V1_XSEC_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
 }
 _REGIME_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "regime_v1": REGIME_FEATURE_COLUMNS,
@@ -78,6 +115,7 @@ _FEATURE_SET_DEFAULT_REGIME: Dict[str, str] = {
     "sma_plus_regime_v1": "regime_v1",
     "xsec_plus_regime_v1": "regime_v1",
     "core_v1_regime": "regime_v1",
+    "core_v1_xsec_regime": "regime_v1",
 }
 
 
@@ -425,6 +463,7 @@ __all__ = [
     "OPTIONS_OBSERVATION_COLUMNS",
     "SMA_PLUS_XSEC_OBSERVATION_COLUMNS",
     "EQUITY_XSEC_OBSERVATION_COLUMNS",
+    "CORE_V1_XSEC_OBSERVATION_COLUMNS",
     "normalize_feature_set_name",
     "normalize_regime_feature_set_name",
     "is_universe_feature_set",
