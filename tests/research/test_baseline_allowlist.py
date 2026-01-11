@@ -70,7 +70,25 @@ def baseline_env(tmp_path, monkeypatch):
                 root=data_root / "baseline_allowlist",
             )
 
-        def build_engine(self, *, replay_mode: bool = True, live_mode: bool = False) -> ShadowEngine:
+        def add_qualification_allowlist(self, reason: str = "qualification replay") -> Path:
+            path = data_root / "qualification_allowlist" / f"{spec.experiment_id}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "experiment_id": spec.experiment_id,
+                "reason": reason,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            return path
+
+        def build_engine(
+            self,
+            *,
+            replay_mode: bool = True,
+            live_mode: bool = False,
+            qualification_replay: bool = False,
+            qualification_reason: str | None = None,
+        ) -> ShadowEngine:
             state_store = StateStore(
                 spec.experiment_id,
                 run_id=run_id,
@@ -95,6 +113,9 @@ def baseline_env(tmp_path, monkeypatch):
                 replay_mode=replay_mode,
                 live_mode=live_mode,
                 baseline_allowlist_root=data_root / "baseline_allowlist",
+                qualification_allowlist_root=data_root / "qualification_allowlist",
+                qualification_replay_allowed=qualification_replay,
+                qualification_allow_reason=qualification_reason,
             )
 
         def reset(self) -> None:
@@ -111,7 +132,7 @@ def test_allowlisted_baseline_can_replay(baseline_env):
     engine = baseline_env.build_engine()
     summary = engine.run(max_steps=2)
     assert summary["unpromoted_execution_allowed"] is True
-    assert summary["unpromoted_execution_reason"] == "baseline_allowlist"
+    assert summary["unpromoted_execution_reason"] == "baseline execution metrics"
     state_payload = json.loads(Path(summary["state_path"]).read_text(encoding="utf-8"))
     assert state_payload["unpromoted_execution_allowed"] is True
     assert state_payload["baseline_allowlist_path"]
@@ -126,3 +147,24 @@ def test_allowlist_does_not_allow_live_execution(baseline_env):
     baseline_env.add_allowlist()
     with pytest.raises(RuntimeError, match="Baseline allowlist only permits replay-mode execution"):
         baseline_env.build_engine(replay_mode=False, live_mode=True)
+
+
+def test_qualification_allowlist_enables_replay(baseline_env):
+    baseline_env.add_qualification_allowlist()
+    engine = baseline_env.build_engine()
+    summary = engine.run(max_steps=1)
+    assert summary["unpromoted_allow_source"] == "qualification_allowlist"
+    state = json.loads(Path(summary["state_path"]).read_text(encoding="utf-8"))
+    assert state["qualification_allowlist_path"]
+
+
+def test_cli_flag_enables_replay(baseline_env):
+    engine = baseline_env.build_engine(qualification_replay=True, qualification_reason="cli test")
+    summary = engine.run(max_steps=1)
+    assert summary["unpromoted_allow_source"] == "qualification_cli"
+    assert summary["unpromoted_execution_reason"] == "cli test"
+
+
+def test_qualification_flag_disallowed_for_live(baseline_env):
+    with pytest.raises(RuntimeError, match="not promoted"):
+        baseline_env.build_engine(replay_mode=False, qualification_replay=True)

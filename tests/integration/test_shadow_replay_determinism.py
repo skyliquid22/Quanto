@@ -89,6 +89,15 @@ def test_shadow_replay_determinism(tmp_path, monkeypatch):
     second_values = _extract_portfolio_values(second_logs)
     assert first_values == second_values
 
+    cmd_sim = cmd + ["--execution-mode", "sim", "--reset"]
+    sim_run = subprocess.run(cmd_sim, cwd=REPO_ROOT, capture_output=True, text=True)
+    assert sim_run.returncode == 0, sim_run.stdout + sim_run.stderr
+    metrics_path = run_dir / "execution_metrics.json"
+    assert metrics_path.exists()
+    metrics_payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    fill_rate = metrics_payload.get("summary", {}).get("fill_rate")
+    assert fill_rate is not None and fill_rate > 0.0
+
 
 def _write_canonical_year(data_root: Path, symbol: str, *, year: int, rows: Iterable[dict]) -> None:
     base = data_root / "canonical" / "equity_ohlcv" / symbol / "daily"

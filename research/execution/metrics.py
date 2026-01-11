@@ -130,9 +130,18 @@ class ExecutionMetricsRecorder:
         return self.snapshot()["summary"]
 
     def snapshot(self) -> dict[str, object]:
+        submitted = self._orders_submitted
+        fills = self._orders_filled
+        rejects = self._orders_rejected
+        if submitted <= 0:
+            fill_rate = 1.0
+            reject_rate = 0.0
+        else:
+            fill_rate = float(fills / submitted)
+            reject_rate = float(rejects / max(submitted + rejects, 1))
         summary = {
-            "fill_rate": float(self._orders_filled / max(self._orders_submitted, 1)),
-            "reject_rate": float(self._orders_rejected / max(self._orders_submitted + self._orders_rejected, 1)),
+            "fill_rate": fill_rate,
+            "reject_rate": reject_rate,
             "avg_slippage_bps": float(_weighted_average(self._slippage_weighted_sum, self._slippage_notional)),
             "p95_slippage_bps": float(_weighted_quantile(self._slippage_samples, 0.95) or 0.0),
             "total_fees": float(self._fees),

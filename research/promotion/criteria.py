@@ -8,10 +8,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
+import subprocess
+import sys
+import hashlib
+
+from infra.paths import get_data_root
 from research.experiments.ablation import DEFAULT_SWEEP_ROOT
 from research.experiments.comparator import compare_experiments
 from research.experiments.registry import ExperimentRecord, ExperimentRegistry
 from research.experiments.regression import RegressionGateRule, default_gate_rules, evaluate_gates
+from research.experiments.spec import ExperimentSpec
 from research.promotion.execution_criteria import ExecutionQualificationCriteria
 from research.promotion.execution_metrics_locator import (
     ExecutionMetricsLocatorResult,
@@ -21,6 +27,7 @@ from research.promotion.regime_criteria import RegimeQualificationCriteria
 
 _SANITY_TURNOVER_METRIC = "trading.turnover_1d_mean"
 _PHASE1_WARNING = "Baseline equals candidate; delta-based gates skipped (Phase 1 mode)."
+_REGIME_TOLERANCE = 1e-9
 
 
 @dataclass(frozen=True)
@@ -166,6 +173,7 @@ class QualificationCriteria:
         failed_hard: List[str] = []
         failed_soft: List[str] = []
         execution_resolution: Dict[str, Any] = {}
+        deterministic_present = self._has_deterministic_replay(metrics_payload)
 
         if gate_report.overall_status == "fail":
             failed_hard.append("regression_gates_failed")
@@ -179,8 +187,8 @@ class QualificationCriteria:
         for reason in self._sanity_reasons(metrics_payload):
             failed_hard.append(reason)
 
-        if not self._has_deterministic_replay(metrics_payload):
-            failed_hard.append("deterministic_replay_missing")
+        for reason in self._regime_high_vol_hard_failures(metrics_payload, baseline_metrics):
+            failed_hard.append(reason)
 
         sharpe_reason = self._sharpe_improvement_reason(metrics_payload, baseline_metrics)
         if sharpe_reason:
@@ -217,22 +225,78 @@ class QualificationCriteria:
             registry_root=registry_root,
             shadow_root=shadow_root,
         )
-        execution_resolution["candidate"] = candidate_resolution.to_dict()
-        if candidate_resolution.found:
-            metrics_payload = _attach_execution_section(metrics_payload, candidate_resolution)
+        candidate_info = candidate_resolution.to_dict()
+        if not candidate_resolution.found:
+            replay_info = self._attempt_shadow_replay(
+                candidate_record,
+                registry_root=registry_root,
+                label="candidate",
+            )
+            candidate_info["qualification_replay"] = replay_info
+            if replay_info.get("returncode") == 0:
+                candidate_resolution = locate_execution_metrics(
+                    candidate_record.experiment_id,
+                    registry_root=registry_root,
+                    shadow_root=shadow_root,
+                )
+                candidate_info = candidate_resolution.to_dict()
+                candidate_info["qualification_replay"] = replay_info
+        execution_resolution["candidate"] = candidate_info
+        if candidate_info.get("found"):
+            metrics_payload = _attach_execution_section(
+                metrics_payload,
+                candidate_resolution,
+                persist=True,
+            )
         else:
             failed_hard.append("execution_metrics_missing")
+
+        if (
+            not deterministic_present
+            and candidate_info.get("found")
+            and _has_shadow_deterministic_artifacts(candidate_resolution)
+        ):
+            deterministic_present = True
 
         baseline_resolution = locate_execution_metrics(
             baseline_record.experiment_id,
             registry_root=registry_root,
             shadow_root=shadow_root,
         )
-        execution_resolution["baseline"] = baseline_resolution.to_dict()
-        if baseline_resolution.found:
-            baseline_metrics = _attach_execution_section(baseline_metrics, baseline_resolution)
+        baseline_info = baseline_resolution.to_dict()
+        if not baseline_resolution.found:
+            replay_info = self._attempt_shadow_replay(
+                baseline_record,
+                registry_root=registry_root,
+                label="baseline",
+            )
+            baseline_info["qualification_replay"] = replay_info
+            if replay_info.get("returncode") == 0:
+                baseline_resolution = locate_execution_metrics(
+                    baseline_record.experiment_id,
+                    registry_root=registry_root,
+                    shadow_root=shadow_root,
+                )
+                baseline_info = baseline_resolution.to_dict()
+                baseline_info["qualification_replay"] = replay_info
+        execution_resolution["baseline"] = baseline_info
+        if baseline_info.get("found"):
+            baseline_metrics = _attach_execution_section(
+                baseline_metrics,
+                baseline_resolution,
+                persist=True,
+            )
         else:
             failed_soft.append("execution_baseline_metrics_missing")
+
+        if not deterministic_present:
+            failed_hard.append("deterministic_replay_missing")
+
+        comparison = compare_experiments(
+            candidate_record.experiment_id,
+            baseline_record.experiment_id,
+            registry=registry,
+        )
 
         regime_report: Mapping[str, Any] | None = None
         if self.regime_qualification is not None:
@@ -371,6 +435,86 @@ class QualificationCriteria:
                 reasons.append(f"stability_regressed:{key}")
         return reasons
 
+    def _regime_high_vol_hard_failures(
+        self,
+        candidate_metrics: Mapping[str, Any],
+        baseline_metrics: Mapping[str, Any],
+    ) -> List[str]:
+        reasons: List[str] = []
+        candidate_entry = _regime_entry(candidate_metrics, "high_vol")
+        baseline_entry = _regime_entry(baseline_metrics, "high_vol")
+        if candidate_entry is None or baseline_entry is None:
+            reasons.append("regime_high_vol_metrics_missing")
+            return reasons
+        cand_draw = _as_float(candidate_entry.get("max_drawdown"))
+        base_draw = _as_float(baseline_entry.get("max_drawdown"))
+        if cand_draw is None or base_draw is None:
+            reasons.append("regime_high_vol_metrics_missing")
+        elif cand_draw > (base_draw + _REGIME_TOLERANCE):
+            reasons.append("regime_high_vol_drawdown_regressed")
+        cand_exposure = _as_float(candidate_entry.get("avg_exposure"))
+        base_exposure = _as_float(baseline_entry.get("avg_exposure"))
+        if cand_exposure is None or base_exposure is None:
+            if "regime_high_vol_metrics_missing" not in reasons:
+                reasons.append("regime_high_vol_metrics_missing")
+        elif cand_exposure > (base_exposure + _REGIME_TOLERANCE):
+            reasons.append("regime_high_vol_exposure_increased")
+        return reasons
+
+    def _attempt_shadow_replay(
+        self,
+        record: ExperimentRecord,
+        *,
+        registry_root: Path,
+        label: str,
+    ) -> Dict[str, Any]:
+        info: Dict[str, Any] = {"invoked": False}
+        try:
+            spec = ExperimentSpec.from_file(record.spec_path)
+        except Exception as exc:  # pragma: no cover - defensive
+            info["reason"] = f"spec_error:{exc}"
+            return info
+        start = getattr(spec, "start_date", None)
+        end = getattr(spec, "end_date", None)
+        if start is None or end is None:
+            info["reason"] = "spec_missing_dates"
+            return info
+        script_path = Path(__file__).resolve().parents[2] / "scripts" / "run_shadow.py"
+        window_start = start.isoformat()
+        window_end = end.isoformat()
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--experiment-id",
+            record.experiment_id,
+            "--replay",
+            "--start-date",
+            window_start,
+            "--end-date",
+            window_end,
+            "--registry-root",
+            str(registry_root),
+            "--qualification-replay",
+            "--qualification-reason",
+            f"qualification_auto_{label}",
+            "--execution-mode",
+            "sim",
+        ]
+        run_dir = _shadow_run_dir(record.experiment_id, window_start, window_end)
+        if run_dir.exists():
+            cmd.append("--resume")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        info.update(
+            {
+                "invoked": True,
+                "command": cmd,
+                "returncode": int(result.returncode),
+                "stdout_tail": result.stdout[-2000:],
+                "stderr_tail": result.stderr[-2000:],
+            }
+        )
+        return info
+
     def _route_failure(
         self,
         reason: str,
@@ -422,6 +566,44 @@ def _load_metrics(path: Path) -> Mapping[str, Any]:
     return payload
 
 
+def _shadow_run_dir(experiment_id: str, start: str, end: str) -> Path:
+    run_id = _derive_shadow_run_id(experiment_id, start, end)
+    return get_data_root() / "shadow" / experiment_id / run_id
+
+
+def _derive_shadow_run_id(experiment_id: str, start: str, end: str) -> str:
+    payload = {
+        "experiment_id": experiment_id,
+        "window_start": start,
+        "window_end": end,
+        "mode": "replay",
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    return f"replay_{digest[:12]}"
+
+
+def _has_shadow_deterministic_artifacts(locator_result: ExecutionMetricsLocatorResult) -> bool:
+    if locator_result.source != "shadow":
+        return False
+    exec_path = locator_result.execution_metrics_path
+    if exec_path is None:
+        return False
+    run_dir = exec_path.parent
+    state_path = run_dir / "state.json"
+    summary_path = run_dir / "summary.json"
+    return state_path.exists() and summary_path.exists()
+
+
+def _regime_entry(metrics_payload: Mapping[str, Any], bucket: str) -> Mapping[str, Any] | None:
+    section = metrics_payload.get("performance_by_regime")
+    if not isinstance(section, Mapping):
+        return None
+    entry = section.get(bucket)
+    if not isinstance(entry, Mapping):
+        return None
+    return entry
+
+
 def _extract_metric(payload: Mapping[str, Any], metric_id: str) -> float | None:
     parts = metric_id.split(".")
     node: Any = payload
@@ -447,36 +629,42 @@ def _as_float(value: Any) -> float | None:
 def _attach_execution_section(
     metrics_payload: Mapping[str, Any],
     locator_result: ExecutionMetricsLocatorResult,
+    *,
+    persist: bool = False,
 ) -> Mapping[str, Any]:
     payload = dict(metrics_payload)
     exec_path = locator_result.execution_metrics_path
     metrics_path = locator_result.metrics_path
-    if locator_result.source == "embedded":
-        target = metrics_path or exec_path
-        if target and target.exists():
-            try:
-                data = json.loads(target.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                return payload
-            execution = data.get("execution")
-            if execution is not None:
-                payload["execution"] = execution
-        return payload
-    if exec_path and exec_path.exists():
+    execution = None
+    if exec_path and exec_path.exists() and exec_path != metrics_path:
         try:
-            payload["execution"] = json.loads(exec_path.read_text(encoding="utf-8"))
+            execution = json.loads(exec_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            return payload
-        return payload
-    if metrics_path and metrics_path.exists():
+            execution = None
+    if execution is None and metrics_path and metrics_path.exists():
         try:
             data = json.loads(metrics_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            return payload
-        execution = data.get("execution")
-        if execution is not None:
-            payload["execution"] = execution
+            data = None
+        if isinstance(data, Mapping):
+            execution = data.get("execution")
+    if execution is not None:
+        payload["execution"] = execution
+        if persist:
+            _persist_execution_section(metrics_path, execution)
     return payload
+
+
+def _persist_execution_section(metrics_path: Path | None, execution: Mapping[str, Any]) -> None:
+    if not metrics_path:
+        return
+    try:
+        payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+    payload = dict(payload)
+    payload["execution"] = execution
+    metrics_path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
 
 
 def _coerce_int(value: Any) -> int:

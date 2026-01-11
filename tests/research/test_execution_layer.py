@@ -58,6 +58,17 @@ def test_sim_execution_determinism(shadow_env):
     assert log_one == log_two
 
 
+def test_replay_writes_execution_metrics(shadow_env):
+    shadow_env.reset_run_dir()
+    engine = shadow_env.build_engine(execution_mode="none")
+    summary = engine.run()
+    metrics_path = Path(summary["execution_metrics_path"])
+    payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    assert "summary" in payload
+    assert payload["summary"]["turnover_realized"] >= 0.0
+    assert payload["summary"]["fill_rate"] == pytest.approx(1.0)
+
+
 def test_execution_resume_safety(shadow_env):
     shadow_env.reset_run_dir()
     baseline = shadow_env.build_engine(execution_mode="sim")

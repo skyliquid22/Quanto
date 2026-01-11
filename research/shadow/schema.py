@@ -34,6 +34,9 @@ class ShadowState:
     unpromoted_execution_allowed: bool = False
     unpromoted_execution_reason: str | None = None
     baseline_allowlist_path: str | None = None
+    qualification_allowlist_path: str | None = None
+    unpromoted_allow_source: str | None = None
+    unpromoted_allow_timestamp: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +64,9 @@ class ShadowState:
             "unpromoted_execution_allowed": bool(self.unpromoted_execution_allowed),
             "unpromoted_execution_reason": self.unpromoted_execution_reason,
             "baseline_allowlist_path": self.baseline_allowlist_path,
+            "qualification_allowlist_path": self.qualification_allowlist_path,
+            "unpromoted_allow_source": self.unpromoted_allow_source,
+            "unpromoted_allow_timestamp": self.unpromoted_allow_timestamp,
         }
 
     @classmethod
@@ -92,6 +98,9 @@ class ShadowState:
             unpromoted_execution_allowed=bool(payload.get("unpromoted_execution_allowed", False)),
             unpromoted_execution_reason=payload.get("unpromoted_execution_reason"),
             baseline_allowlist_path=payload.get("baseline_allowlist_path"),
+            qualification_allowlist_path=payload.get("qualification_allowlist_path"),
+            unpromoted_allow_source=payload.get("unpromoted_allow_source"),
+            unpromoted_allow_timestamp=payload.get("unpromoted_allow_timestamp"),
         )
 
 
@@ -131,6 +140,9 @@ def initial_state(
         unpromoted_execution_allowed=False,
         unpromoted_execution_reason=None,
         baseline_allowlist_path=None,
+        qualification_allowlist_path=None,
+        unpromoted_allow_source=None,
+        unpromoted_allow_timestamp=None,
     )
 
 

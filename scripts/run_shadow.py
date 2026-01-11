@@ -40,6 +40,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Resume a previous run directory instead of starting from scratch.",
     )
+    parser.add_argument(
+        "--qualification-replay",
+        action="store_true",
+        help="Allow replay for qualification evidence even if experiment is unpromoted.",
+    )
+    parser.add_argument(
+        "--qualification-reason",
+        help="Custom reason recorded when using --qualification-replay.",
+    )
+    parser.add_argument(
+        "--execution-mode",
+        choices=("none", "sim", "alpaca_paper"),
+        help="Execution mode controlling broker/controller engagement. Defaults to 'sim' when --qualification-replay is set, otherwise 'none'.",
+    )
     return parser.parse_args(argv)
 
 
@@ -109,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     logger = ShadowLogger(run_dir)
     baseline_allow_root = data_root / "baseline_allowlist"
+    qualification_allow_root = data_root / "qualification_allowlist"
+    execution_mode = args.execution_mode or ("sim" if args.qualification_replay else "none")
     engine = ShadowEngine(
         experiment_id=args.experiment_id,
         data_source=data_source,
@@ -121,6 +137,10 @@ def main(argv: list[str] | None = None) -> int:
         replay_mode=True,
         live_mode=False,
         baseline_allowlist_root=baseline_allow_root,
+        qualification_allowlist_root=qualification_allow_root,
+        qualification_replay_allowed=args.qualification_replay,
+        qualification_allow_reason=args.qualification_reason,
+        execution_mode=execution_mode,
     )
     summary = engine.run(max_steps=max_steps)
     print(  # noqa: T201 - CLI status

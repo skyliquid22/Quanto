@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -33,6 +34,7 @@ from research.risk import RiskConfig, project_weights
 from research.promotion import baseline_allowlist
 from research.shadow.data_source import MarketDataSource
 from research.shadow.logging import ShadowLogger
+from research.shadow.ppo_policy import PpoShadowPolicy, resolve_ppo_checkpoint_path
 from research.shadow.portfolio import (
     PortfolioUpdate,
     constraint_diagnostics,
@@ -67,6 +69,9 @@ class ShadowEngine:
         replay_mode: bool = False,
         live_mode: bool = False,
         baseline_allowlist_root: Path | None = None,
+        qualification_allowlist_root: Path | None = None,
+        qualification_replay_allowed: bool = False,
+        qualification_allow_reason: str | None = None,
     ) -> None:
         self.experiment_id = experiment_id
         self.data_source = data_source
@@ -82,6 +87,7 @@ class ShadowEngine:
         self._policy = None
         self._sma_policy: SMAWeightPolicy | None = None
         self._hierarchical_policy: HierarchicalPolicy | None = None
+        self._ppo_policy: PpoShadowPolicy | None = None
         self._calendar = self.data_source.calendar()
         if not self._calendar:
             raise ValueError("Replay calendar is empty; nothing to execute.")
@@ -95,12 +101,17 @@ class ShadowEngine:
         self._execution_mode = execution_mode or "none"
         self._execution_options = dict(execution_options or {})
         self._execution_controller: ExecutionController | None = None
-        self._execution_metrics: ExecutionMetricsRecorder | None = None
+        self._execution_metrics: ExecutionMetricsRecorder | None = ExecutionMetricsRecorder()
         self._execution_broker = None
-        self._execution_metrics_path: Path | None = None
+        self._execution_metrics_path: Path | None = self.out_dir / "execution_metrics.json"
         self._replay_mode = bool(replay_mode)
         self._live_mode = bool(live_mode)
         self._baseline_allowlist_root = Path(baseline_allowlist_root) if baseline_allowlist_root else None
+        self._qualification_allowlist_root = (
+            Path(qualification_allowlist_root) if qualification_allowlist_root else None
+        )
+        self._qualification_replay_allowed = bool(qualification_replay_allowed)
+        self._qualification_allow_reason = qualification_allow_reason
         self._allowlist_metadata: Dict[str, str] | None = None
         self._load_spec()
         self._validate_promotion()
@@ -159,6 +170,8 @@ class ShadowEngine:
             execution_details = self._summarize_execution(result, step_identity=step_identity)
             self._update_state_from_execution(state, result, as_of)
         diag = constraint_diagnostics(update.weights, prev_weights, self._spec.risk_config)
+        if self._execution_controller is None and self._execution_metrics is not None:
+            self._execution_metrics.record_turnover(update.turnover)
         state.cash = update.cash
         state.holdings = update.holdings
         state.last_weights = update.weights
@@ -214,6 +227,9 @@ class ShadowEngine:
         summary["unpromoted_execution_allowed"] = state.unpromoted_execution_allowed
         summary["unpromoted_execution_reason"] = state.unpromoted_execution_reason
         summary["baseline_allowlist_path"] = state.baseline_allowlist_path
+        summary["qualification_allowlist_path"] = state.qualification_allowlist_path
+        summary["unpromoted_allow_source"] = state.unpromoted_allow_source
+        summary["unpromoted_allow_timestamp"] = state.unpromoted_allow_timestamp
         metrics_path = self._write_execution_metrics()
         if metrics_path is not None:
             summary["execution_metrics_path"] = str(metrics_path)
@@ -241,13 +257,36 @@ class ShadowEngine:
         ):
             self._allowlist_metadata = {
                 "path": str(allow_entry.path),
-                "reason": "baseline_allowlist",
+                "reason": str(allow_entry.payload.get("reason") or "baseline_allowlist"),
+                "source": "baseline_allowlist",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             return
         if allow_entry is not None and not self._replay_mode:
             raise RuntimeError(
                 "Baseline allowlist only permits replay-mode execution; live execution remains disabled."
             )
+        qual_entry = self._load_qualification_allow_entry()
+        if (
+            qual_entry is not None
+            and self._replay_mode
+            and not self._live_mode
+        ):
+            self._allowlist_metadata = qual_entry
+            self._allowlist_metadata.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+            return
+        if (
+            self._qualification_replay_allowed
+            and self._replay_mode
+            and not self._live_mode
+        ):
+            self._allowlist_metadata = {
+                "path": None,
+                "reason": self._qualification_allow_reason or "qualification_cli",
+                "source": "qualification_cli",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            return
         raise RuntimeError(f"Experiment '{self.experiment_id}' is not promoted; shadow execution is disabled.")
 
     def _ensure_state(self) -> ShadowState:
@@ -267,7 +306,13 @@ class ShadowEngine:
         if self._allowlist_metadata:
             state.unpromoted_execution_allowed = True
             state.unpromoted_execution_reason = self._allowlist_metadata.get("reason")
-            state.baseline_allowlist_path = self._allowlist_metadata.get("path")
+            state.unpromoted_allow_source = self._allowlist_metadata.get("source")
+            state.unpromoted_allow_timestamp = self._allowlist_metadata.get("timestamp")
+            source = self._allowlist_metadata.get("source")
+            if source == "baseline_allowlist":
+                state.baseline_allowlist_path = self._allowlist_metadata.get("path")
+            elif source in {"qualification_allowlist", "qualification_cli"}:
+                state.qualification_allowlist_path = self._allowlist_metadata.get("path")
         self._state = state
         return state
 
@@ -283,6 +328,27 @@ class ShadowEngine:
         if state.current_step < 0 or state.current_step > len(self._calendar):
             raise RuntimeError("State current_step out of bounds.")
 
+    def _load_qualification_allow_entry(self) -> Dict[str, str] | None:
+        if not self._qualification_allowlist_root:
+            return None
+        path = self._qualification_allowlist_root / f"{self.experiment_id}.json"
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+        reason = str(payload.get("reason") or "qualification_allowlist")
+        metadata = {
+            "path": str(path),
+            "reason": reason,
+            "source": "qualification_allowlist",
+        }
+        created_at = payload.get("created_at")
+        if isinstance(created_at, str) and created_at:
+            metadata["timestamp"] = created_at
+        return metadata
+
     def _initialize_policy(self) -> None:
         if self._spec.hierarchy_enabled:
             self._hierarchical_policy = self._build_hierarchical_policy()
@@ -296,7 +362,13 @@ class ShadowEngine:
         elif policy == "equal_weight":
             self._sma_policy = None
         elif policy == "ppo":
-            raise RuntimeError("PPO policies are not supported in shadow execution v1.")
+            checkpoint = resolve_ppo_checkpoint_path(self._record.root, self.experiment_id)
+            self._ppo_policy = PpoShadowPolicy.from_checkpoint(
+                checkpoint,
+                num_assets=len(self._symbol_order),
+            )
+        else:
+            raise RuntimeError(f"Unsupported policy '{policy}' for shadow execution.")
 
     def _build_hierarchical_policy(self) -> HierarchicalPolicy:
         spec = self._spec
@@ -349,6 +421,11 @@ class ShadowEngine:
             if self._sma_policy is None:
                 raise RuntimeError("SMA policy not initialized.")
             raw = [float(self._sma_policy.decide(snapshot["panel"][symbol])) for symbol in self._symbol_order]
+        elif self._spec.policy == "ppo":
+            if self._ppo_policy is None:
+                raise RuntimeError("PPO policy not initialized.")
+            obs = self._build_observation(snapshot, prev_weights)
+            raw = self._ppo_policy.act(obs)
         else:
             raise RuntimeError(f"Unsupported policy '{self._spec.policy}' for shadow execution.")
         projected = project_weights(raw, prev_weights, self._spec.risk_config)
@@ -364,7 +441,6 @@ class ShadowEngine:
             return
         if mode not in {"sim", "alpaca_paper"}:
             raise ValueError(f"Unsupported execution_mode '{self._execution_mode}'")
-        self._execution_metrics = ExecutionMetricsRecorder()
         order_config = self._build_order_config()
         risk_config = self._build_execution_risk_config()
         controller_kwargs: dict[str, object] = {}
@@ -449,8 +525,8 @@ class ShadowEngine:
                 if column not in features:
                     raise ValueError(f"Snapshot missing required feature '{column}' for symbol '{symbol}'")
                 values.append(float(features[column]))
-            if regime_values:
-                values.extend(regime_values)
+        if regime_values:
+            values.extend(regime_values)
         values.extend(float(value) for value in prev_weights)
         return tuple(values)
 

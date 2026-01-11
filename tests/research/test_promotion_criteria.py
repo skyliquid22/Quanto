@@ -4,8 +4,14 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+import pytest
+
+from research.experiments.comparator import ComparisonResult, ComparisonSummary
 from research.experiments.registry import ExperimentRegistry
+from research.promotion import criteria as criteria_mod
 from research.promotion.criteria import QualificationCriteria, SweepRobustnessCriteria
+from research.promotion.execution_criteria import ExecutionQualificationCriteria
+from research.promotion.execution_metrics_locator import ExecutionMetricsLocatorResult
 from research.promotion.regime_criteria import RegimeQualificationCriteria
 
 
@@ -277,6 +283,116 @@ def test_execution_slippage_soft_gate(tmp_path: Path):
         registry=registry,
     )
     assert any("execution.summary.avg_slippage_bps_regressed" in reason for reason in evaluation.failed_soft)
+
+
+def test_execution_delta_comparison_populates_summary():
+    criteria = ExecutionQualificationCriteria()
+    candidate_metrics = {
+        "execution": {
+            "summary": {
+                "avg_slippage_bps": 6.0,
+                "total_fees": 110.0,
+                "turnover_realized": 0.55,
+                "fill_rate": 0.995,
+                "reject_rate": 0.001,
+                "execution_halts": 0.0,
+                "p95_slippage_bps": 8.0,
+                "partial_fill_rate": 0.0,
+            }
+        }
+    }
+    baseline_metrics = {
+        "execution": {
+            "summary": {
+                "avg_slippage_bps": 5.0,
+                "total_fees": 100.0,
+                "turnover_realized": 0.5,
+                "fill_rate": 0.994,
+                "reject_rate": 0.001,
+                "execution_halts": 0.0,
+                "p95_slippage_bps": 7.5,
+                "partial_fill_rate": 0.0,
+            }
+        }
+    }
+    comparison = ComparisonResult(
+        candidate_experiment_id="cand",
+        baseline_experiment_id="base",
+        metadata={},
+        metrics=[],
+        summary=ComparisonSummary(
+            total_metrics=0,
+            compared_metrics=0,
+            num_improved=0,
+            num_regressed=0,
+            num_unchanged=0,
+            num_missing=0,
+        ),
+        missing_metrics=[],
+        regime_deltas={},
+        execution_metrics={},
+    )
+    evaluation = criteria.evaluate(comparison, candidate_metrics, baseline_metrics)
+    summary_block = evaluation.report["comparison"]["summary"]
+    assert summary_block["turnover_realized"]["delta"] == pytest.approx(0.05)
+    gate = next(entry for entry in evaluation.report["gates"] if entry["gate_id"] == "execution_turnover_drift")
+    assert gate["status"] == "pass"
+    assert gate["message"] != "baseline_missing"
+
+
+def test_execution_delta_comparison_populates_summary():
+    criteria = ExecutionQualificationCriteria()
+    candidate_metrics = {
+        "execution": {
+            "summary": {
+                "avg_slippage_bps": 6.0,
+                "total_fees": 110.0,
+                "turnover_realized": 0.55,
+                "fill_rate": 0.995,
+                "reject_rate": 0.001,
+                "execution_halts": 0.0,
+                "p95_slippage_bps": 8.0,
+                "partial_fill_rate": 0.0,
+            }
+        }
+    }
+    baseline_metrics = {
+        "execution": {
+            "summary": {
+                "avg_slippage_bps": 5.0,
+                "total_fees": 100.0,
+                "turnover_realized": 0.5,
+                "fill_rate": 0.994,
+                "reject_rate": 0.001,
+                "execution_halts": 0.0,
+                "p95_slippage_bps": 7.5,
+                "partial_fill_rate": 0.0,
+            }
+        }
+    }
+    comparison = ComparisonResult(
+        candidate_experiment_id="cand",
+        baseline_experiment_id="base",
+        metadata={},
+        metrics=[],
+        summary=ComparisonSummary(
+            total_metrics=0,
+            compared_metrics=0,
+            num_improved=0,
+            num_regressed=0,
+            num_unchanged=0,
+            num_missing=0,
+        ),
+        missing_metrics=[],
+        regime_deltas={},
+        execution_metrics={},
+    )
+    evaluation = criteria.evaluate(comparison, candidate_metrics, baseline_metrics)
+    summary_block = evaluation.report["comparison"]["summary"]
+    assert summary_block["avg_slippage_bps"]["delta"] == pytest.approx(1.0)
+    gate = next(g for g in evaluation.report["gates"] if g["gate_id"] == "execution_avg_slippage_delta")
+    assert gate["status"] == "pass"
+    assert gate["message"] != "baseline_missing"
 
 
 def test_execution_sharpe_correlation_warning(tmp_path: Path):

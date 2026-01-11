@@ -9,6 +9,26 @@ from typing import Any, Dict, List, Mapping
 from research.experiments.comparator import ComparisonResult, MetricComparison
 
 _TOLERANCE = 1e-9
+_SUMMARY_KEYS = (
+    "avg_slippage_bps",
+    "execution_halts",
+    "fill_rate",
+    "p95_slippage_bps",
+    "partial_fill_rate",
+    "reject_rate",
+    "total_fees",
+    "turnover_realized",
+)
+_SUMMARY_KEYS = (
+    "avg_slippage_bps",
+    "execution_halts",
+    "fill_rate",
+    "p95_slippage_bps",
+    "partial_fill_rate",
+    "reject_rate",
+    "total_fees",
+    "turnover_realized",
+)
 
 
 @dataclass(frozen=True)
@@ -105,7 +125,7 @@ class ExecutionQualificationCriteria:
             failure_reason="execution_slippage_exceeded",
         )
 
-        summary_block = comparison.execution_metrics.get("summary") if comparison.execution_metrics else {}
+        summary_block = _build_execution_summary_block(summary_candidate, summary_baseline)
         if skip_delta_checks:
             _record_delta_skip(gates, "execution_avg_slippage_delta", "execution.summary.avg_slippage_bps")
             _record_delta_skip(gates, "execution_fee_drift", "execution.summary.total_fees")
@@ -144,10 +164,16 @@ class ExecutionQualificationCriteria:
                 gates=gates,
             )
 
+        comparison_report = dict(comparison.execution_metrics or {})
+        comparison_report["summary"] = summary_block
+        comparison_report["regime"] = _build_execution_regime_block(
+            candidate_execution.get("regime") if isinstance(candidate_execution, Mapping) else None,
+            baseline_execution.get("regime") if isinstance(baseline_execution, Mapping) else None,
+        )
         report = {
             "candidate": candidate_execution,
             "baseline": baseline_execution or {},
-            "comparison": comparison.execution_metrics,
+            "comparison": comparison_report,
             "gates": gates,
         }
         return ExecutionGateEvaluation(
@@ -209,10 +235,11 @@ class ExecutionQualificationCriteria:
         skip: bool = False,
     ) -> None:
         entry = comparison_summary.get(metric) if isinstance(comparison_summary, Mapping) else None
-        observed = entry.get("candidate") if isinstance(entry, Mapping) else None
-        baseline_value = entry.get("baseline") if isinstance(entry, Mapping) else None
-        delta = entry.get("delta") if isinstance(entry, Mapping) else None
-        delta_pct = entry.get("delta_pct") if isinstance(entry, Mapping) else None
+        candidate_value = _as_float(entry.get("candidate")) if isinstance(entry, Mapping) else None
+        baseline_value = _as_float(entry.get("baseline")) if isinstance(entry, Mapping) else None
+        delta = _as_float(entry.get("delta")) if isinstance(entry, Mapping) else None
+        delta_pct = _as_float(entry.get("delta_pct")) if isinstance(entry, Mapping) else None
+        observed = candidate_value
         status = "pass"
         message = "within threshold"
         metric_id = f"execution.summary.{metric}"
@@ -220,9 +247,15 @@ class ExecutionQualificationCriteria:
         if skip:
             status = "skip"
             message = "phase1_delta_skip"
-        elif entry is None or (delta is None and delta_pct is None):
+        elif entry is None:
+            status = "skip"
+            message = "comparison_missing"
+        elif baseline_value is None:
             status = "skip"
             message = "baseline_missing"
+        elif candidate_value is None:
+            status = "skip"
+            message = "candidate_missing"
         else:
             value = delta if direction == "absolute" else delta_pct
             if value is None:
@@ -290,6 +323,67 @@ def _execution_section(metrics_payload: Mapping[str, Any]) -> Mapping[str, Any] 
     if isinstance(section, Mapping):
         return section
     return None
+
+
+def _build_execution_summary_block(
+    candidate_summary: Mapping[str, Any] | None,
+    baseline_summary: Mapping[str, Any] | None,
+) -> Dict[str, Dict[str, float | None]]:
+    block: Dict[str, Dict[str, float | None]] = {}
+    for key in _SUMMARY_KEYS:
+        candidate_value = _as_float(candidate_summary.get(key)) if isinstance(candidate_summary, Mapping) else None
+        baseline_value = _as_float(baseline_summary.get(key)) if isinstance(baseline_summary, Mapping) else None
+        delta = None
+        delta_pct = None
+        if candidate_value is not None and baseline_value is not None:
+            delta = candidate_value - baseline_value
+            if abs(baseline_value) > _TOLERANCE:
+                delta_pct = (delta / baseline_value) * 100.0
+        block[key] = {
+            "candidate": candidate_value,
+            "baseline": baseline_value,
+            "delta": delta,
+            "delta_pct": delta_pct,
+        }
+    return block
+
+
+def _build_execution_regime_block(
+    candidate_regime: Mapping[str, Any] | None,
+    baseline_regime: Mapping[str, Any] | None,
+) -> Dict[str, Dict[str, Dict[str, float | None]]]:
+    block: Dict[str, Dict[str, Dict[str, float | None]]] = {}
+    buckets = set()
+    if isinstance(candidate_regime, Mapping):
+        buckets.update(candidate_regime.keys())
+    if isinstance(baseline_regime, Mapping):
+        buckets.update(baseline_regime.keys())
+    for bucket in sorted(buckets):
+        cand_entry = candidate_regime.get(bucket) if isinstance(candidate_regime, Mapping) else None
+        base_entry = baseline_regime.get(bucket) if isinstance(baseline_regime, Mapping) else None
+        metrics = set()
+        if isinstance(cand_entry, Mapping):
+            metrics.update(cand_entry.keys())
+        if isinstance(base_entry, Mapping):
+            metrics.update(base_entry.keys())
+        bucket_block: Dict[str, Dict[str, float | None]] = {}
+        for metric in sorted(metrics):
+            cand_value = _as_float(cand_entry.get(metric)) if isinstance(cand_entry, Mapping) else None
+            base_value = _as_float(base_entry.get(metric)) if isinstance(base_entry, Mapping) else None
+            delta = None
+            delta_pct = None
+            if cand_value is not None and base_value is not None:
+                delta = cand_value - base_value
+                if abs(base_value) > _TOLERANCE:
+                    delta_pct = (delta / base_value) * 100.0
+            bucket_block[metric] = {
+                "candidate": cand_value,
+                "baseline": base_value,
+                "delta": delta,
+                "delta_pct": delta_pct,
+            }
+        block[bucket] = bucket_block
+    return block
 
 
 def _record_delta_skip(gates: List[Dict[str, Any]], gate_id: str, metric: str) -> None:
