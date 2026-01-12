@@ -10,6 +10,9 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Mapping, MutableMapping, Protocol, Sequence
 import time
+import csv
+import io
+import gzip
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -60,7 +63,7 @@ class _TransportProtocol(Protocol):
 class IvolatilityClient:
     """Small REST client with pagination, retries, and deterministic ordering."""
 
-    DEFAULT_BASE_URL = "https://api.ivolatility.com/backtest"
+    DEFAULT_BASE_URL = "https://restapi.ivolatility.com"
     DEFAULT_TIMEOUT = 15.0
     DEFAULT_MAX_RETRIES = 3
     DEFAULT_BACKOFF = 1.5
@@ -89,9 +92,9 @@ class IvolatilityClient:
     ) -> None:
         self.api_key = api_key or os.environ.get("IVOLATILITY_API_KEY")
         self.api_secret = api_secret or os.environ.get("IVOLATILITY_API_SECRET")
-        if not self.api_key or not self.api_secret:
+        if not self.api_key:
             raise IvolatilityAuthenticationError(
-                "IVOLATILITY_API_KEY and IVOLATILITY_API_SECRET environment variables must be set"
+                "IVOLATILITY_API_KEY environment variable must be set"
             )
 
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
@@ -134,25 +137,140 @@ class IvolatilityClient:
             )
         return records[0]
 
+    def fetch_async_dataset(
+        self,
+        endpoint: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        poll_timeout_s: int = 300,
+        poll_interval_s: float = 2.0,
+        completion_codes: set[str] | None = None,
+        pending_codes: set[str] | None = None,
+    ) -> list[dict[str, Any]] | bytes:
+        """Submit an async job and poll urlForDetails until completion."""
+
+        resolved_endpoint = endpoint.strip("/")
+        params_with_credentials = self._inject_credentials(params or {})
+        fingerprint = self._request_fingerprint(resolved_endpoint, params_with_credentials)
+        cached_dataset = self._read_dataset_cache(fingerprint)
+        if cached_dataset is not None:
+            return cached_dataset
+
+        completion_set = {str(code).upper() for code in (completion_codes or {"COMPLETED", "SUCCESS", "DONE"})}
+        pending_set = {str(code).upper() for code in (pending_codes or {"PENDING", "RUNNING", "PROCESSING"})}
+        payload = self._request_with_retry(
+            resolved_endpoint,
+            params_with_credentials,
+            use_cache=False,
+        )
+        final_payload = self._resolve_async_payload(
+            payload,
+            completion_set,
+            pending_set,
+            poll_timeout_s,
+            poll_interval_s,
+            fingerprint,
+        )
+        dataset = self._finalize_async_dataset(final_payload, fingerprint)
+        self._write_dataset_cache(fingerprint, dataset)
+        return dataset
+
     def _inject_credentials(self, params: Mapping[str, Any]) -> MutableMapping[str, Any]:
         merged: MutableMapping[str, Any] = dict(params)
         merged.setdefault("apiKey", self.api_key)
-        merged.setdefault("apiSecret", self.api_secret)
+        if self.api_secret:
+            merged.setdefault("apiSecret", self.api_secret)
         return merged
+
+    def _request_fingerprint(self, endpoint: str, params: Mapping[str, Any]) -> str:
+        payload = {
+            "endpoint": endpoint,
+            "params": self._sanitize_fingerprint_params(params),
+        }
+        digest = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+        return digest[:16]
+
+    def _sanitize_fingerprint_params(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        sanitized: dict[str, Any] = {}
+        for key, value in params.items():
+            lowered = str(key).lower()
+            if lowered in {"apikey", "apisecret"}:
+                continue
+            sanitized[str(key)] = value
+        return sanitized
+
+    def _read_dataset_cache(self, fingerprint: str) -> list[dict[str, Any]] | bytes | None:
+        if not self.cache_dir:
+            return None
+        json_path = self.cache_dir / f"async-{fingerprint}.json"
+        if json_path.exists():
+            try:
+                payload = json.loads(json_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return None
+            if isinstance(payload, list):
+                normalized: list[dict[str, Any]] = []
+                for entry in payload:
+                    if isinstance(entry, Mapping):
+                        normalized.append(dict(entry))
+                return self._normalize_records(normalized)
+        bin_path = self.cache_dir / f"async-{fingerprint}.bin"
+        if bin_path.exists():
+            return bin_path.read_bytes()
+        return None
+
+    def _write_dataset_cache(self, fingerprint: str, dataset: list[dict[str, Any]] | bytes) -> None:
+        if not self.cache_dir:
+            return
+        json_path = self.cache_dir / f"async-{fingerprint}.json"
+        bin_path = self.cache_dir / f"async-{fingerprint}.bin"
+        if isinstance(dataset, bytes):
+            if json_path.exists():
+                json_path.unlink()
+            bin_path.write_bytes(dataset)
+        else:
+            if bin_path.exists():
+                bin_path.unlink()
+            serialized = json.dumps(dataset, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            json_path.write_text(serialized, encoding="utf-8")
+
+    @staticmethod
+    def map_date_params(
+        *,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        as_of_date: date | None = None,
+    ) -> dict[str, str]:
+        """Translate canonical date fields into iVolatility query parameters."""
+
+        params: dict[str, str] = {}
+        if start_date:
+            params["from"] = start_date.isoformat()
+        if end_date:
+            params["to"] = end_date.isoformat()
+        if as_of_date:
+            params["date"] = as_of_date.isoformat()
+        return params
 
     def _request_with_retry(
         self,
-        endpoint: str,
+        endpoint_or_url: str,
         params: Mapping[str, Any],
-    ) -> Mapping[str, Any]:
-        cache_key = self._cache_key(endpoint, params)
-        cached = self._read_cache(cache_key)
-        if cached is not None:
-            return cached
+        *,
+        use_cache: bool = True,
+        parse_json: bool = True,
+    ) -> Mapping[str, Any] | TransportResponse:
+        cache_key: str | None = None
+        cached: Mapping[str, Any] | None = None
+        if use_cache and parse_json:
+            cache_key = self._cache_key(endpoint_or_url, params)
+            cached = self._read_cache(cache_key)
+            if cached is not None:
+                return cached
 
         attempt = 0
         backoff = self.backoff_factor
-        url = f"{self.base_url}/{endpoint}"
+        url = self._resolve_url(endpoint_or_url)
         while True:
             response = self.transport("GET", url, params, self._headers(), self.timeout)
             if response.status_code == 429:
@@ -181,8 +299,11 @@ class IvolatilityClient:
                     f"iVolatility API responded with HTTP {response.status_code}: {response.text}"
                 )
 
-            payload = self._parse_payload(response.text)
-            if self.cache_dir:
+            if not parse_json:
+                return response
+
+            payload = self._parse_payload(response)
+            if use_cache and cache_key:
                 self._write_cache(cache_key, payload)
             return payload
 
@@ -191,6 +312,214 @@ class IvolatilityClient:
             "Accept": "application/json",
             "User-Agent": "quanto-ingestion/1.0",
         }
+
+    def _resolve_url(self, endpoint_or_url: str) -> str:
+        text = (endpoint_or_url or "").strip()
+        if text.startswith("http://") or text.startswith("https://"):
+            return text
+        return f"{self.base_url}/{text.lstrip('/')}"
+
+    def _resolve_async_payload(
+        self,
+        payload: Mapping[str, Any],
+        completion_codes: set[str],
+        pending_codes: set[str],
+        poll_timeout_s: int,
+        poll_interval_s: float,
+        fingerprint: str,
+    ) -> Mapping[str, Any]:
+        status = self._extract_status(payload)
+        if not status:
+            return payload
+        code = self._normalize_status_code(status.get("code"))
+        if not code or code in completion_codes:
+            return payload
+        if code in pending_codes:
+            detail_url = (
+                status.get("urlForDetails")
+                or payload.get("urlForDetails")
+                or status.get("url")
+            )
+            if not detail_url:
+                raise IvolatilityClientError(
+                    f"Async job pending but missing urlForDetails (fingerprint={fingerprint})"
+                )
+            return self._poll_for_completion(
+                str(detail_url),
+                completion_codes,
+                pending_codes,
+                poll_timeout_s,
+                poll_interval_s,
+                fingerprint,
+            )
+
+        description = status.get("description") or status.get("message") or ""
+        raise IvolatilityClientError(
+            f"Async job failed with status {code} (fingerprint={fingerprint}) {description}"
+        )
+
+    def _extract_status(self, payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        status = payload.get("status")
+        if isinstance(status, Mapping):
+            return status
+        return None
+
+    def _normalize_status_code(self, code: Any) -> str:
+        if code is None:
+            return ""
+        return str(code).strip().upper()
+
+    def _poll_for_completion(
+        self,
+        detail_url: str,
+        completion_codes: set[str],
+        pending_codes: set[str],
+        poll_timeout_s: int,
+        poll_interval_s: float,
+        fingerprint: str,
+    ) -> Mapping[str, Any]:
+        deadline = time.time() + max(0, poll_timeout_s)
+        interval = max(0.0, poll_interval_s)
+        params = self._credential_params_for_url(detail_url)
+        while True:
+            now = time.time()
+            if now >= deadline:
+                raise IvolatilityClientError(
+                    f"Async job timed out after {poll_timeout_s}s (fingerprint={fingerprint})"
+                )
+            wait_time = min(interval, max(0.0, deadline - now))
+            if wait_time > 0:
+                time.sleep(wait_time)
+            payload = self._request_with_retry(detail_url, params, use_cache=False)
+            status = self._extract_status(payload)
+            if not status:
+                return payload
+            code = self._normalize_status_code(status.get("code"))
+            if not code or code in completion_codes:
+                return payload
+            if code in pending_codes:
+                interval = self._next_poll_interval(interval)
+                continue
+            description = status.get("description") or status.get("message") or ""
+            raise IvolatilityClientError(
+                f"Async job failed with status {code} (fingerprint={fingerprint}) {description}"
+            )
+
+    def _next_poll_interval(self, current: float) -> float:
+        if current <= 0:
+            return 0.0
+        growth = max(current * 2.5, current + 1.0)
+        return min(10.0, growth)
+
+    def _credential_params_for_url(self, url: str) -> Mapping[str, Any]:
+        parsed = urllib_parse.urlparse(url)
+        query_keys = {key.lower() for key, _ in urllib_parse.parse_qsl(parsed.query, keep_blank_values=True)}
+        params: dict[str, Any] = {}
+        if "apikey" not in query_keys:
+            params["apiKey"] = self.api_key
+        if self.api_secret and "apisecret" not in query_keys:
+            params["apiSecret"] = self.api_secret
+        return params
+
+    def _finalize_async_dataset(
+        self,
+        payload: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+        fingerprint: str,
+    ) -> list[dict[str, Any]] | bytes:
+        if isinstance(payload, Sequence) and not isinstance(payload, (Mapping, str, bytes)):
+            normalized = [dict(entry) for entry in payload if isinstance(entry, Mapping)]
+            if normalized:
+                return self._normalize_records(normalized)
+        records = self._extract_records(payload) if isinstance(payload, Mapping) else []
+        if records:
+            return self._normalize_records(records)
+        download_url = self._extract_download_url(payload)
+        if download_url:
+            return self._download_and_normalize_file(download_url)
+        raise IvolatilityClientError(
+            f"Async job completed without data payload (fingerprint={fingerprint})"
+        )
+
+    def _extract_download_url(self, payload: Mapping[str, Any] | Sequence[Mapping[str, Any]]) -> str | None:
+        if isinstance(payload, Mapping):
+            candidates = (
+                "urlForDownload",
+                "downloadUrl",
+                "downloadURL",
+                "urlForFile",
+                "fileUrl",
+                "fileURL",
+                "urlForResult",
+                "resultUrl",
+            )
+            for key in candidates:
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            status = self._extract_status(payload)
+            if status:
+                for key in candidates:
+                    value = status.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+            data = payload.get("data")
+            if isinstance(data, Mapping):
+                for key in candidates:
+                    value = data.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+        return None
+
+    def _download_and_normalize_file(self, url: str) -> bytes:
+        params = self._credential_params_for_url(url)
+        response = self._request_with_retry(
+            url,
+            params,
+            use_cache=False,
+            parse_json=False,
+        )
+        if not isinstance(response, TransportResponse):  # pragma: no cover - defensive
+            raise IvolatilityClientError("Transport returned unexpected payload for download")
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        text = response.text or ""
+        if "csv" in content_type or self._looks_like_csv(text):
+            return self._canonicalize_csv_bytes(text)
+        return text.encode("utf-8")
+
+    def _canonicalize_csv_bytes(self, text: str) -> bytes:
+        reader = csv.DictReader(io.StringIO(text), delimiter=",")
+        rows: list[dict[str, Any]] = [dict(row) for row in reader]
+        normalized = self._normalize_records(rows)
+        fieldnames = list(reader.fieldnames or [])
+        observed_keys: set[str] = set()
+        for record in normalized:
+            observed_keys.update(record.keys())
+        if not fieldnames:
+            fieldnames = sorted(observed_keys)
+        else:
+            missing = sorted(observed_keys.difference(fieldnames))
+            fieldnames.extend(missing)
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")
+        writer.writeheader()
+        for record in normalized:
+            writer.writerow({name: self._format_csv_value(record.get(name)) for name in fieldnames})
+        return output.getvalue().encode("utf-8")
+
+    def _format_csv_value(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        return str(value)
+
+    def _looks_like_csv(self, text: str) -> bool:
+        if not text:
+            return False
+        first_line = text.splitlines()[0]
+        return "," in first_line
 
     def _cache_key(self, endpoint: str, params: Mapping[str, Any]) -> str:
         elements = [endpoint]
@@ -308,18 +637,31 @@ class IvolatilityClient:
                     continue
         return None
 
-    def _parse_payload(self, text: str) -> Mapping[str, Any]:
-        if not text.strip():
+    def _parse_payload(self, response: TransportResponse) -> Mapping[str, Any]:
+        text = response.text or ""
+        stripped = text.lstrip()
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        # JSON payloads
+        if not stripped:
             return {}
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:  # pragma: no cover - defensive guard
-            raise IvolatilityClientError(f"Invalid JSON response: {exc}") from exc
-        if isinstance(parsed, Mapping):
-            return parsed
-        if isinstance(parsed, list):
-            return {"records": parsed}
-        raise IvolatilityClientError("Unexpected JSON payload received from API")
+        if "json" in content_type or stripped.startswith("{") or stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise IvolatilityClientError(f"Invalid JSON response: {exc}") from exc
+            if isinstance(parsed, Mapping):
+                return parsed
+            if isinstance(parsed, list):
+                return {"records": parsed}
+            raise IvolatilityClientError("Unexpected JSON payload received from API")
+        # CSV payloads
+        first_line = stripped.splitlines()[0] if stripped else ""
+        if "csv" in content_type or "," in first_line:
+            reader = csv.DictReader(io.StringIO(text))
+            return {"records": [dict(row) for row in reader]}
+        raise IvolatilityClientError(
+            f"Unsupported response content-type '{response.headers.get('Content-Type')}'"
+        )
 
 
 def _default_transport(
@@ -344,7 +686,14 @@ def _default_transport(
     req = urllib_request.Request(url, data=data, method=method, headers=request_headers)
     try:
         with urllib_request.urlopen(req, timeout=timeout) as response:
-            text = response.read().decode("utf-8")
+            raw = response.read()
+            encoding = (response.headers.get("Content-Encoding") or "").lower()
+            if "gzip" in encoding:
+                try:
+                    raw = gzip.decompress(raw)
+                except OSError:
+                    raw = raw
+            text = raw.decode("utf-8")
             return TransportResponse(
                 status_code=response.getcode(),
                 headers=dict(response.headers.items()),
@@ -359,6 +708,28 @@ def _default_transport(
         )
     except urllib_error.URLError as exc:  # pragma: no cover - exercised only when transport unavailable
         raise IvolatilityClientError(f"Transport error contacting iVolatility: {exc}") from exc
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(_canonicalize_value(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _canonicalize_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _canonicalize_value(value[key]) for key in sorted(value.keys(), key=str)}
+    if isinstance(value, (list, tuple)):
+        return [_canonicalize_value(item) for item in value]
+    if isinstance(value, set):
+        return [_canonicalize_value(item) for item in sorted(value, key=str)]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8", errors="ignore")
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
 __all__ = [

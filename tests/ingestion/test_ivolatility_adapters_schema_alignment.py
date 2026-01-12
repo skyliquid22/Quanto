@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from pathlib import Path
 import sys
@@ -29,27 +30,42 @@ class _StaticClient:
         self.calls = []
 
     def fetch(self, endpoint, params):
-        symbol = (
-            params.get("symbol")
-            or params.get("option_symbol")
-            or params.get("underlying_symbol")
-            or ""
-        )
-        key = (endpoint, symbol)
-        payload = self.responses.get(key, [])
+        symbol = params.get("symbol") or params.get("option_symbol") or ""
+        date_value = params.get("date")
+        key = (endpoint, symbol, date_value)
+        payload = self.responses.get(key)
+        if payload is None:
+            key = (endpoint, symbol)
+            payload = self.responses.get(key)
+        if payload is None:
+            key = (endpoint,)
+            payload = self.responses.get(key, [])
         self.calls.append({"endpoint": endpoint, "params": dict(params)})
         return [dict(entry) for entry in payload]
+
+    def fetch_async_dataset(self, endpoint, params):
+        return self.fetch(endpoint, params)
 
 
 def test_equity_adapter_produces_schema_aligned_records(tmp_path):
     responses = {
-        (IvolatilityEquityAdapter.EQUITY_ENDPOINT, "AAPL"): [
-            {"date": "2024-01-02", "open": 2, "high": 3, "low": 1, "close": 2.5, "volume": 1000},
-            {"date": "2024-01-01", "open": 1, "high": 2, "low": 1, "close": 1.8, "volume": 900},
-        ]
+        (
+            IvolatilityEquityAdapter.STOCK_PRICES_ENDPOINT,
+            "AAPL",
+            "2024-01-01",
+        ): [
+            {"date": "2024-01-01", "openPrice": 1, "highPrice": 2, "lowPrice": 1, "closePrice": 1.8, "volume": 900}
+        ],
+        (
+            IvolatilityEquityAdapter.STOCK_PRICES_ENDPOINT,
+            "AAPL",
+            "2024-01-02",
+        ): [
+            {"date": "2024-01-02", "openPrice": 2, "highPrice": 3, "lowPrice": 1, "closePrice": 2.5, "volume": 1000}
+        ],
     }
     client = _StaticClient(responses)
-    adapter = IvolatilityEquityAdapter(client)
+    adapter = IvolatilityEquityAdapter(client, config={"use_bulk": False})
     request = EquityIngestionRequest(
         symbols=("AAPL",),
         start_date=date(2024, 1, 1),
@@ -57,8 +73,7 @@ def test_equity_adapter_produces_schema_aligned_records(tmp_path):
         vendor="ivolatility",
     )
 
-    raw_records = adapter.fetch_raw(request)
-    normalized = adapter.normalize_records(raw_records)
+    normalized = asyncio.run(adapter.fetch_equity_ohlcv_rest(request))  # type: ignore[name-defined]
     validated, manifest = adapter.validate(
         normalized,
         run_id="test-equity",
@@ -71,17 +86,17 @@ def test_equity_adapter_produces_schema_aligned_records(tmp_path):
 
 def test_options_adapter_covers_reference_and_timeseries(tmp_path):
     responses = {
-        (IvolatilityOptionsAdapter.CONTRACT_ENDPOINT, "AAPL"): [
+        (IvolatilityOptionsAdapter.SERIES_ENDPOINT, "AAPL", "2024-01-02"): [
             {
-                "option_symbol": "AAPL240119C00150000",
+                "optionSymbol": "AAPL240119C00150000",
                 "underlying_symbol": "AAPL",
-                "expiration_date": "2024-01-19",
+                "expiration": "2024-01-19",
                 "strike": 150,
-                "option_type": "call",
+                "callPut": "C",
                 "multiplier": 100,
             }
         ],
-        (IvolatilityOptionsAdapter.OHLCV_ENDPOINT, "AAPL240119C00150000"): [
+        (IvolatilityOptionsAdapter.SINGLE_CONTRACT_ENDPOINT, "AAPL240119C00150000"): [
             {
                 "option_symbol": "AAPL240119C00150000",
                 "date": "2024-01-02",
@@ -90,12 +105,6 @@ def test_options_adapter_covers_reference_and_timeseries(tmp_path):
                 "low": 3.1,
                 "close": 3.4,
                 "volume": 42,
-            }
-        ],
-        (IvolatilityOptionsAdapter.OPEN_INTEREST_ENDPOINT, "AAPL240119C00150000"): [
-            {
-                "option_symbol": "AAPL240119C00150000",
-                "date": "2024-01-02",
                 "open_interest": 5000,
             }
         ],

@@ -55,6 +55,10 @@ def load_config(path: Path) -> Mapping[str, Any]:
     return json.loads(text)
 
 
+def _warn_unified_cli() -> None:
+    print(_DEPRECATION_NOTICE, file=sys.stderr)
+
+
 def build_request(config: Mapping[str, Any]) -> FundamentalsIngestionRequest:
     statement_types = tuple(config.get("statement_types", ("quarterly", "annual")))
     return FundamentalsIngestionRequest(
@@ -68,6 +72,7 @@ def build_request(config: Mapping[str, Any]) -> FundamentalsIngestionRequest:
 
 
 def main() -> int:
+    _warn_unified_cli()
     args = parse_args()
     config_path = Path(args.config)
     config = load_config(config_path)
@@ -128,3 +133,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+_DEPRECATION_NOTICE = (
+    "Legacy ingest_fundamentals entrypoint detected. Prefer `python -m scripts.ingest "
+    "--domain fundamentals ...` for multi-vendor ingestion."
+)

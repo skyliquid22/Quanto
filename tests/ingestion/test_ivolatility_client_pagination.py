@@ -89,3 +89,30 @@ def test_fetch_one_requires_exactly_one_record():
 
     with pytest.raises(IvolatilityClientError):
         client.fetch_one("options/contracts", {"underlying": "AAPL"})
+
+
+def test_ivolatility_client_allows_missing_secret():
+    transport = _FakeTransport(
+        [
+            {
+                "body": {
+                    "results": [
+                        {"id": 1, "symbol": "AAPL"},
+                    ]
+                }
+            }
+        ]
+    )
+    client = IvolatilityClient(
+        api_key="key-only",
+        api_secret=None,
+        transport=transport,
+        cache_dir=None,
+        max_retries=0,
+    )
+
+    client.fetch("options/contracts", {"underlying": "AAPL"})
+
+    params = transport.calls[0]["params"]
+    assert params.get("apiKey") == "key-only"
+    assert "apiSecret" not in params

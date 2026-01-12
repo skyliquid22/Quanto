@@ -1,0 +1,30 @@
+# configs/ingest_options_ivol_smoke.yml
+
+vendor: ivolatility
+mode: rest
+
+symbols:
+  - AAPL
+
+# As-of snapshot date
+as_of_date: "2025-12-15"
+
+ivolatility:
+  api_key_env: IVOLATILITY_API_KEY
+
+  options:
+    endpoint: option_series_on_date
+
+    # Bounded slice (VERY IMPORTANT)
+    exp_from: "2026-01-17"
+    exp_to:   "2026-01-17"
+
+    strike_from: 180
+    strike_to:   190
+
+    call_put: ALL    # CALL | PUT | ALL
+
+    # Controls what adapters emit
+    include_reference: true
+    include_ohlcv: false      # iVol EOD snapshot ≠ true OHLCV; keep false unless schema allows
+    include_open_interest: true

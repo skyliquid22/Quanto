@@ -51,6 +51,10 @@ def load_config(path: Path) -> Mapping[str, Any]:
     return json.loads(text)
 
 
+def _warn_unified_cli() -> None:
+    print(_DEPRECATION_NOTICE, file=sys.stderr)
+
+
 def build_request(config: Mapping[str, Any]) -> EquityIngestionRequest:
     return EquityIngestionRequest(
         symbols=config["symbols"],
@@ -122,9 +126,15 @@ async def _amain(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    _warn_unified_cli()
     args = parse_args()
     return asyncio.run(_amain(args))
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+_DEPRECATION_NOTICE = (
+    "Legacy ingest_equity_ohlcv entrypoint detected. Prefer `python -m scripts.ingest "
+    "--domain equity_ohlcv ...` for multi-vendor ingestion."
+)

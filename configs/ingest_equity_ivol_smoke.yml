@@ -1,0 +1,35 @@
+# configs/ingest_equity_ivol_smoke.yml
+
+vendor: ivolatility
+mode: rest
+
+domain_defaults:
+  equity_ohlcv:
+    interval: daily
+
+symbols:
+  - AAPL
+  - MSFT
+
+start_date: "2025-12-14"
+end_date: "2025-12-15"
+
+ivolatility:
+  api_key_env: IVOLATILITY_API_KEY
+
+  # Prefer bulk endpoint when available
+  equity_mode: bulk            # bulk | per_symbol
+  symbols:
+    - AAPL
+    - MSFT
+  columns:
+    - SYMBOL
+    - TRADE_DATE
+    - OPEN_PRICE
+    - HIGH
+    - LOW
+    - CLOSE_PRICE
+    - STOCK_VOLUME
+  timeout: 60
+  max_retries: 5
+  backoff_factor: 2

@@ -44,6 +44,10 @@ def load_config(path: Path) -> Mapping[str, Any]:
     return json.loads(text)
 
 
+def _warn_unified_cli() -> None:
+    print(_DEPRECATION_NOTICE, file=sys.stderr)
+
+
 def plan_requires_rest(plan: OptionsIngestionPlan) -> bool:
     for partition in (*plan.reference, *plan.ohlcv, *plan.open_interest):
         if partition.mode == "rest":
@@ -86,6 +90,7 @@ def build_pipeline(
 
 
 def main() -> int:
+    _warn_unified_cli()
     args = parse_args()
     config_path = Path(args.config)
     config = load_config(config_path)
@@ -129,3 +134,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+_DEPRECATION_NOTICE = (
+    "Legacy ingest_options_contracts entrypoint detected. Prefer `python -m scripts.ingest "
+    "--domain <option_domain> ...` for multi-vendor ingestion."
+)

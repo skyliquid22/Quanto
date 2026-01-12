@@ -3,16 +3,42 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping
+from typing import Any, Dict, Literal, Mapping, Tuple, Type
 
 from .adapters import (
     EquityIngestionRequest,
+    IvolatilityEquityAdapter,
+    IvolatilityOptionsAdapter,
     FundamentalsIngestionRequest,
     OptionReferenceIngestionRequest,
     OptionTimeseriesIngestionRequest,
+    PolygonEquityAdapter,
+    PolygonFundamentalsAdapter,
+    PolygonOptionsAdapter,
 )
 
 Mode = Literal["rest", "flat_file"]
+Domain = Literal[
+    "equity_ohlcv",
+    "option_contract_reference",
+    "option_contract_ohlcv",
+    "option_open_interest",
+    "fundamentals",
+]
+
+
+@dataclass(frozen=True)
+class AdapterRoute:
+    """Resolved adapter target for a specific domain/vendor/mode tuple."""
+
+    domain: Domain
+    vendor: str
+    mode: Mode
+    adapter: Type[Any]
+
+    @property
+    def adapter_name(self) -> str:
+        return self.adapter.__name__
 
 
 @dataclass
@@ -41,6 +67,22 @@ class IngestionRouter:
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         self.config = RouterConfig.from_mapping(config)
+        self._adapter_registry: Dict[Tuple[str, str, Mode], AdapterRoute] = self._build_default_registry()
+
+    def register_adapter(self, domain: Domain, vendor: str, mode: Mode, adapter: Type[Any]) -> None:
+        key = (domain, vendor.lower(), mode)
+        self._adapter_registry[key] = AdapterRoute(domain=domain, vendor=vendor.lower(), mode=mode, adapter=adapter)
+
+    def resolve_vendor_adapter(self, domain: str, vendor: str, mode: Mode) -> AdapterRoute:
+        normalized_vendor = vendor.lower()
+        key = (domain, normalized_vendor, mode)
+        try:
+            return self._adapter_registry[key]
+        except KeyError as exc:
+            raise ValueError(
+                f"No adapter registered for domain={domain}, vendor={vendor}, mode={mode}. "
+                "Confirm that the run config specifies a supported combination."
+            ) from exc
 
     def route_equity_ohlcv(self, request: EquityIngestionRequest) -> Mode:
         return self._route_timeseries(
@@ -101,5 +143,83 @@ class IngestionRouter:
             return "flat_file"
         return "rest"
 
+    def _build_default_registry(self) -> Dict[Tuple[str, str, Mode], AdapterRoute]:
+        registry: Dict[Tuple[str, str, Mode], AdapterRoute] = {}
+        for mode in ("rest", "flat_file"):
+            registry[("equity_ohlcv", "polygon", mode)] = AdapterRoute(
+                domain="equity_ohlcv",
+                vendor="polygon",
+                mode=mode,  # type: ignore[arg-type]
+                adapter=PolygonEquityAdapter,
+            )
+        registry[("equity_ohlcv", "ivolatility", "rest")] = AdapterRoute(
+            domain="equity_ohlcv",
+            vendor="ivolatility",
+            mode="rest",
+            adapter=IvolatilityEquityAdapter,
+        )
+        for mode in ("rest", "flat_file"):
+            registry[("fundamentals", "polygon", mode)] = AdapterRoute(
+                domain="fundamentals",
+                vendor="polygon",
+                mode=mode,  # type: ignore[arg-type]
+                adapter=PolygonFundamentalsAdapter,
+            )
+        registry[("option_contract_reference", "polygon", "rest")] = AdapterRoute(
+            domain="option_contract_reference",
+            vendor="polygon",
+            mode="rest",
+            adapter=PolygonOptionsAdapter,
+        )
+        registry[("option_contract_reference", "polygon", "flat_file")] = AdapterRoute(
+            domain="option_contract_reference",
+            vendor="polygon",
+            mode="flat_file",
+            adapter=PolygonOptionsAdapter,
+        )
+        registry[("option_contract_reference", "ivolatility", "rest")] = AdapterRoute(
+            domain="option_contract_reference",
+            vendor="ivolatility",
+            mode="rest",
+            adapter=IvolatilityOptionsAdapter,
+        )
+        registry[("option_contract_ohlcv", "polygon", "rest")] = AdapterRoute(
+            domain="option_contract_ohlcv",
+            vendor="polygon",
+            mode="rest",
+            adapter=PolygonOptionsAdapter,
+        )
+        registry[("option_contract_ohlcv", "polygon", "flat_file")] = AdapterRoute(
+            domain="option_contract_ohlcv",
+            vendor="polygon",
+            mode="flat_file",
+            adapter=PolygonOptionsAdapter,
+        )
+        registry[("option_contract_ohlcv", "ivolatility", "rest")] = AdapterRoute(
+            domain="option_contract_ohlcv",
+            vendor="ivolatility",
+            mode="rest",
+            adapter=IvolatilityOptionsAdapter,
+        )
+        registry[("option_open_interest", "polygon", "rest")] = AdapterRoute(
+            domain="option_open_interest",
+            vendor="polygon",
+            mode="rest",
+            adapter=PolygonOptionsAdapter,
+        )
+        registry[("option_open_interest", "polygon", "flat_file")] = AdapterRoute(
+            domain="option_open_interest",
+            vendor="polygon",
+            mode="flat_file",
+            adapter=PolygonOptionsAdapter,
+        )
+        registry[("option_open_interest", "ivolatility", "rest")] = AdapterRoute(
+            domain="option_open_interest",
+            vendor="ivolatility",
+            mode="rest",
+            adapter=IvolatilityOptionsAdapter,
+        )
+        return registry
 
-__all__ = ["IngestionRouter", "RouterConfig"]
+
+__all__ = ["AdapterRoute", "IngestionRouter", "RouterConfig"]
