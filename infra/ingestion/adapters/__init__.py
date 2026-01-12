@@ -1,5 +1,8 @@
 """Vendor-specific ingestion adapters."""
 
+from .ivolatility_equity import IvolatilityEquityAdapter
+from .ivolatility_fundamentals import IvolatilityFundamentalsAdapter, IvolatilityFundamentalsUnsupported
+from .ivolatility_options import IvolatilityOptionsAdapter
 from .polygon_equity import EquityIngestionRequest, PolygonEquityAdapter, PolygonRESTClient, RateLimitError
 from .polygon_fundamentals import (
     FundamentalsAdapterResult,
@@ -27,4 +30,8 @@ __all__ = [
     "OptionTimeseriesIngestionRequest",
     "PolygonOptionsAdapter",
     "PolygonOptionsRESTClient",
+    "IvolatilityEquityAdapter",
+    "IvolatilityOptionsAdapter",
+    "IvolatilityFundamentalsAdapter",
+    "IvolatilityFundamentalsUnsupported",
 ]
