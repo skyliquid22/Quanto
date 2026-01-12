@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -48,6 +48,14 @@ from research.execution.alpaca_broker import AlpacaBrokerAdapter, AlpacaBrokerCo
 
 
 DEFAULT_INITIAL_CASH = 10_000.0
+
+
+def _stable_timestamp(seed: str) -> str:
+    digest = hashlib.sha256(seed.encode("utf-8")).digest()
+    seconds = int.from_bytes(digest[:6], "big")
+    base = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    window = 5 * 365 * 24 * 60 * 60
+    return (base + timedelta(seconds=seconds % window)).isoformat()
 
 
 class ShadowEngine:
@@ -255,11 +263,15 @@ class ShadowEngine:
             and self._replay_mode
             and not self._live_mode
         ):
+            timestamp = str(
+                allow_entry.payload.get("created_at")
+                or _stable_timestamp(f"baseline_allowlist:{self.experiment_id}:{self.run_id}")
+            )
             self._allowlist_metadata = {
                 "path": str(allow_entry.path),
                 "reason": str(allow_entry.payload.get("reason") or "baseline_allowlist"),
                 "source": "baseline_allowlist",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": timestamp,
             }
             return
         if allow_entry is not None and not self._replay_mode:
@@ -273,7 +285,10 @@ class ShadowEngine:
             and not self._live_mode
         ):
             self._allowlist_metadata = qual_entry
-            self._allowlist_metadata.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+            self._allowlist_metadata.setdefault(
+                "timestamp",
+                _stable_timestamp(f"qualification_allowlist:{self.experiment_id}:{self.run_id}"),
+            )
             return
         if (
             self._qualification_replay_allowed
@@ -284,7 +299,7 @@ class ShadowEngine:
                 "path": None,
                 "reason": self._qualification_allow_reason or "qualification_cli",
                 "source": "qualification_cli",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": _stable_timestamp(f"qualification_cli:{self.experiment_id}:{self.run_id}"),
             }
             return
         raise RuntimeError(f"Experiment '{self.experiment_id}' is not promoted; shadow execution is disabled.")
@@ -347,6 +362,8 @@ class ShadowEngine:
         created_at = payload.get("created_at")
         if isinstance(created_at, str) and created_at:
             metadata["timestamp"] = created_at
+        else:
+            metadata["timestamp"] = _stable_timestamp(f"qualification_allowlist:{experiment_id}")
         return metadata
 
     def _initialize_policy(self) -> None:

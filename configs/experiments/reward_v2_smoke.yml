@@ -1,0 +1,46 @@
+experiment_name: reward_v2_smoke
+symbols:
+  - AAPL
+  - MSFT
+  - NVDA
+  - AVGO
+  - ORCL
+  - ADBE
+  - CRM
+  - AMD
+  - CSCO
+  - QCOM
+  - TXN
+  - ACN
+  - INTC
+  - IBM
+  - NOW
+  - AMAT
+  - PANW
+  - INTU
+  - ADP
+  - MU
+start_date: "2022-01-01"
+end_date: "2025-12-31"
+interval: daily
+feature_set: core_v1_regime
+regime_feature_set: regime_v1
+policy: ppo
+policy_params:
+  timesteps: 1000
+  learning_rate: 0.0003
+  gamma: 0.99
+  policy: MlpPolicy
+  fast_window: 20
+  slow_window: 50
+  reward_version: reward_v2
+cost_config:
+  transaction_cost_bp: 1.0
+risk_config:
+  long_only: true
+  max_weight: 0.6
+  exposure_cap: 1.0
+  min_cash: 0.0
+  max_turnover_1d: 0.4
+seed: 12
+notes: "Smoke-test PPO with reward_v2 shaping"

@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import shutil
 from dataclasses import dataclass
-from datetime import datetime, timezone
+import hashlib
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, Tuple
+from typing import Any, Dict, Iterable, Mapping, Tuple
 
 from research.experiments.spec import ExperimentSpec
 
@@ -92,7 +93,7 @@ class ExperimentRegistry:
     def write_run_summary(self, paths: ExperimentPaths, payload: Dict[str, Any]) -> Path:
         logs_path = paths.logs_dir / "run_summary.json"
         ordered = dict(sorted(payload.items()))
-        ordered["recorded_at"] = datetime.now(timezone.utc).isoformat()
+        ordered["recorded_at"] = self._deterministic_recorded_at(ordered)
         logs_path.write_text(json.dumps(ordered, sort_keys=True, indent=2), encoding="utf-8")
         return logs_path
 
@@ -190,6 +191,15 @@ class ExperimentRegistry:
         record = self.get(experiment_id)
         spec = ExperimentSpec.from_file(record.spec_path)
         return record, spec
+
+    @staticmethod
+    def _deterministic_recorded_at(payload: Mapping[str, Any]) -> str:
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        digest = hashlib.sha256(serialized.encode("utf-8")).digest()
+        seconds = int.from_bytes(digest[:6], "big")
+        epoch = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        moment = epoch + timedelta(seconds=seconds % (10 * 365 * 24 * 60 * 60))
+        return moment.isoformat()
 
 
 __all__ = ["ExperimentAlreadyExistsError", "ExperimentPaths", "ExperimentRecord", "ExperimentRegistry"]

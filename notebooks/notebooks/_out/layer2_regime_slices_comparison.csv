@@ -1,0 +1,5 @@
+,Baseline (reward_v1),Baseline (reward_v1),Baseline (reward_v1),Baseline (reward_v1),Baseline (reward_v1),Baseline (reward_v1),Candidate (reward_v2),Candidate (reward_v2),Candidate (reward_v2),Candidate (reward_v2),Candidate (reward_v2),Candidate (reward_v2)
+,avg_exposure,avg_turnover,max_drawdown,sharpe,total_return,volatility_ann,avg_exposure,avg_turnover,max_drawdown,sharpe,total_return,volatility_ann
+high_vol,0.193608,0.035349,0.05569,0.204665,0.015484,0.066166,0.233827,0.00806,0.103402,-0.131664,-0.019429,0.083611
+low_vol,0.286315,0.024105,0.047777,0.30639,0.019153,0.051644,0.247939,0.0258,0.072188,0.091924,0.004481,0.051666
+mid_vol,0.259379,0.023019,0.047455,1.701175,0.117751,0.050735,0.247176,0.023168,0.056353,1.241351,0.082849,0.049976

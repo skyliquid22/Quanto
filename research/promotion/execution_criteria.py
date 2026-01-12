@@ -289,7 +289,12 @@ class ExecutionQualificationCriteria:
         gates: List[Dict[str, Any]],
     ) -> None:
         sharpe_entry = _metric_entry(comparison.metrics, "performance.sharpe")
-        slippage_entry = comparison.execution_metrics.get("summary", {}).get("avg_slippage_bps") if comparison.execution_metrics else None
+        slippage_entry = None
+        if comparison.execution_metrics:
+            summary = comparison.execution_metrics.get("summary")
+            if isinstance(summary, Mapping):
+                slippage_entry = summary.get("avg_slippage_bps")
+        slippage_delta = _as_float(slippage_entry.get("delta")) if isinstance(slippage_entry, Mapping) else None
         status = "pass"
         message = "within threshold"
         observed = None
@@ -300,7 +305,7 @@ class ExecutionQualificationCriteria:
             baseline_value = sharpe_entry.baseline_value
             delta = sharpe_entry.delta
             if sharpe_entry.delta < -_TOLERANCE:
-                if isinstance(slippage_entry, Mapping) and slippage_entry.get("delta", 0.0) > _TOLERANCE:
+                if slippage_delta is not None and slippage_delta > _TOLERANCE:
                     status = "warn"
                     message = "execution_sharpe_correlated_with_slippage"
                     severity_failures.append(message)

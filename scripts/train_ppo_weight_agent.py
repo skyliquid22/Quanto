@@ -36,8 +36,9 @@ from research.features.feature_registry import (
     strategy_to_feature_frame,
 )
 from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossover
-from research.training.ppo_trainer import EvaluationResult, evaluate, train_ppo
+from research.training.ppo_trainer import DEFAULT_REWARD_VERSION, EvaluationResult, evaluate, train_ppo
 from research.risk import RiskConfig
+from research.training.reward_registry import get_reward_spec, reward_versions
 from scripts.run_sma_finrl_rollout import (  # type: ignore
     BootstrapMetadata,
     _canonical_files_exist as _rollout_canonical_files_exist,
@@ -117,6 +118,11 @@ def parse_args() -> argparse.Namespace:
         "--force-canonical-build",
         action="store_true",
         help="Force rebuilding canonicals before training.",
+    )
+    parser.add_argument(
+        "--reward-version",
+        default=DEFAULT_REWARD_VERSION,
+        help=f"Reward shaping version to apply (default: {DEFAULT_REWARD_VERSION}).",
     )
     return parser.parse_args()
 
@@ -251,6 +257,23 @@ def _build_risk_config(args: argparse.Namespace) -> RiskConfig:
     )
 
 
+def _normalize_reward_version(value: str | None) -> str:
+    token = (value or DEFAULT_REWARD_VERSION).strip()
+    return token or DEFAULT_REWARD_VERSION
+
+
+def _validate_reward_version(value: str) -> str:
+    normalized = _normalize_reward_version(value)
+    try:
+        get_reward_spec(normalized)
+    except KeyError as exc:  # pragma: no cover - defensive, exercised via CLI
+        available = ", ".join(sorted(reward_versions()))
+        raise SystemExit(
+            f"Unknown reward_version '{value}'. Available reward versions: {available}"
+        ) from exc
+    return normalized
+
+
 def main() -> int:
     args = parse_args()
     payload = run_training(args)
@@ -283,6 +306,8 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
             auto_build=True,
             run_id_seed=args.run_id,
         )
+    reward_version = _validate_reward_version(getattr(args, "reward_version", DEFAULT_REWARD_VERSION))
+    args.reward_version = reward_version
 
     if args.live:
         bootstrap = maybe_run_live_bootstrap(
@@ -406,6 +431,7 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
             learning_rate=args.learning_rate,
             gamma=args.gamma,
             policy=args.policy,
+            reward_version=args.reward_version,
         )
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
@@ -567,6 +593,7 @@ def build_train_report(
         "learning_rate": args.learning_rate,
         "gamma": args.gamma,
         "policy": args.policy,
+        "reward_version": getattr(args, "reward_version", DEFAULT_REWARD_VERSION),
         "duration_seconds": duration_seconds,
     }
     artifacts = {"report": _rel_path(report_path, data_root)}

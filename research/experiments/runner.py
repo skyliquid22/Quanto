@@ -155,6 +155,9 @@ def _run_training(spec: ExperimentSpec, data_root: Path) -> Mapping[str, Any]:
     learning_rate = float(params.get("learning_rate", 3e-4))
     gamma = float(params.get("gamma", 0.99))
     policy_id = str(params.get("policy", "MlpPolicy"))
+    reward_version = params.get("reward_version")
+    if isinstance(reward_version, str):
+        reward_version = reward_version.strip() or None
 
     risk_cfg = spec.risk_config
     args = argparse.Namespace(
@@ -172,6 +175,7 @@ def _run_training(spec: ExperimentSpec, data_root: Path) -> Mapping[str, Any]:
         learning_rate=learning_rate,
         gamma=gamma,
         policy=policy_id,
+        reward_version=reward_version,
         run_id=spec.experiment_id,
         data_root=str(data_root),
         regime_feature_set=spec.regime_feature_set,

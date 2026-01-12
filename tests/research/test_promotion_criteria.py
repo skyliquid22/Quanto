@@ -6,7 +6,7 @@ from typing import Any, Mapping
 
 import pytest
 
-from research.experiments.comparator import ComparisonResult, ComparisonSummary
+from research.experiments.comparator import ComparisonResult, ComparisonSummary, MetricComparison
 from research.experiments.registry import ExperimentRegistry
 from research.promotion import criteria as criteria_mod
 from research.promotion.criteria import QualificationCriteria, SweepRobustnessCriteria
@@ -412,6 +412,80 @@ def test_execution_sharpe_correlation_warning(tmp_path: Path):
         registry=registry,
     )
     assert "execution_sharpe_correlated_with_slippage" in evaluation.failed_soft
+
+
+def test_execution_sharpe_correlation_handles_missing_slippage_delta():
+    criteria = ExecutionQualificationCriteria()
+    candidate_metrics = {
+        "execution": {
+            "summary": {
+                "avg_slippage_bps": 6.0,
+                "total_fees": 100.0,
+                "turnover_realized": 0.5,
+                "fill_rate": 0.995,
+                "reject_rate": 0.001,
+                "execution_halts": 0.0,
+                "p95_slippage_bps": 7.5,
+                "partial_fill_rate": 0.0,
+            }
+        }
+    }
+    baseline_metrics = {
+        "execution": {
+            "summary": {
+                "avg_slippage_bps": 5.5,
+                "total_fees": 100.0,
+                "turnover_realized": 0.5,
+                "fill_rate": 0.994,
+                "reject_rate": 0.001,
+                "execution_halts": 0.0,
+                "p95_slippage_bps": 7.5,
+                "partial_fill_rate": 0.0,
+            }
+        }
+    }
+    comparison = ComparisonResult(
+        candidate_experiment_id="cand",
+        baseline_experiment_id="base",
+        metadata={},
+        metrics=[
+            MetricComparison(
+                metric_id="performance.sharpe",
+                category="performance",
+                name="Sharpe",
+                directionality="higher",
+                candidate_value=0.8,
+                baseline_value=1.0,
+                delta=-0.2,
+                delta_pct=None,
+                status="regressed",
+                reason=None,
+            )
+        ],
+        summary=ComparisonSummary(
+            total_metrics=1,
+            compared_metrics=1,
+            num_improved=0,
+            num_regressed=1,
+            num_unchanged=0,
+            num_missing=0,
+        ),
+        missing_metrics=[],
+        regime_deltas={},
+        execution_metrics={
+            "summary": {
+                "avg_slippage_bps": {
+                    "candidate": 6.0,
+                    "baseline": 5.5,
+                    "delta": None,
+                    "delta_pct": None,
+                }
+            }
+        },
+    )
+    evaluation = criteria.evaluate(comparison, candidate_metrics, baseline_metrics)
+    gate = next(entry for entry in evaluation.report["gates"] if entry["gate_id"] == "execution_sharpe_correlation")
+    assert gate["status"] == "pass"
 
 
 def test_phase1_delta_gates_skipped_with_warning(tmp_path: Path):

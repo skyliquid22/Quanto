@@ -120,10 +120,9 @@ def train_ppo(
 
     if PPO is None:  # pragma: no cover - exercised in orchestration tests
         raise RuntimeError("stable_baselines3 is required for PPO training")
-    wrapped_env = env
-    if reward_version:
-        reward_fn = create_reward(reward_version)
-        wrapped_env = RewardAdapterEnv(env, reward_fn)
+    resolved_reward_version = reward_version or DEFAULT_REWARD_VERSION
+    reward_fn = create_reward(resolved_reward_version)
+    wrapped_env = RewardAdapterEnv(env, reward_fn)
     kwargs = dict(ppo_kwargs)
     if learning_rate is not None:
         kwargs["learning_rate"] = learning_rate

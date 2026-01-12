@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import research.training.ppo_trainer as ppo_trainer
 from research.training.ppo_trainer import RewardAdapterEnv
 from research.training.reward_registry import create_reward, reward_versions
 
@@ -98,3 +99,45 @@ def test_reward_adapter_penalizes_turnover():
         _, shaped_reward, _, info = result
     assert info["reward_version"] == "reward_v2"
     assert shaped_reward < info["base_reward"]
+
+
+def test_train_ppo_uses_default_reward_when_unset(monkeypatch):
+    env = _DummyEnv()
+    captured = {}
+
+    class _FakePPO:
+        def __init__(self, policy, inner_env, **kwargs):
+            captured["env"] = inner_env
+
+        def learn(self, total_timesteps):
+            captured["timesteps"] = total_timesteps
+            return self
+
+    monkeypatch.setattr(ppo_trainer, "PPO", _FakePPO)
+    model = ppo_trainer.train_ppo(env, total_timesteps=5, reward_version=None)
+    assert isinstance(model, _FakePPO)
+    wrapped_env = captured["env"]
+    assert isinstance(wrapped_env, RewardAdapterEnv)
+    assert wrapped_env.reward_version == ppo_trainer.DEFAULT_REWARD_VERSION
+    assert captured["timesteps"] == 5
+
+
+def test_train_ppo_uses_custom_reward_version(monkeypatch):
+    env = _DummyEnv()
+    captured = {}
+
+    class _FakePPO:
+        def __init__(self, policy, inner_env, **kwargs):
+            captured["env"] = inner_env
+
+        def learn(self, total_timesteps):
+            captured["timesteps"] = total_timesteps
+            return self
+
+    monkeypatch.setattr(ppo_trainer, "PPO", _FakePPO)
+    model = ppo_trainer.train_ppo(env, total_timesteps=3, reward_version="reward_v2")
+    assert isinstance(model, _FakePPO)
+    wrapped_env = captured["env"]
+    assert isinstance(wrapped_env, RewardAdapterEnv)
+    assert wrapped_env.reward_version == "reward_v2"
+    assert captured["timesteps"] == 3

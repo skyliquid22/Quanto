@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Dict, Sequence
 
 from research.experiments.registry import ExperimentRegistry
 from research.experiments.regression import RegressionGateRule
@@ -22,6 +22,13 @@ class QualificationResult:
 
     report: QualificationReport
     report_path: Path
+
+    def to_summary(self) -> Dict[str, Any]:
+        """Return a JSON-serializable snapshot of the qualification decision."""
+
+        payload = self.report.to_dict()
+        payload["report_path"] = str(self.report_path)
+        return payload
 
 
 def run_qualification(
