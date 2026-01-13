@@ -35,7 +35,7 @@ class _MockTransport:
             text = json.dumps(body)
         else:
             text = str(body)
-        return TransportResponse(status_code=status, headers=headers, text=text)
+        return TransportResponse(status_code=status, headers=headers, text=text, body=text.encode("utf-8"))
 
 
 def test_async_dataset_polls_until_completion(tmp_path):
@@ -188,3 +188,55 @@ def test_async_dataset_downloads_csv(tmp_path):
     )
     assert replay == payload
     assert len(transport.calls) == 3
+
+
+def test_async_dataset_handles_sequence_with_download(tmp_path):
+    download_url = "https://restapi.ivolatility.com/data/download/list-seq"
+    responses = [
+        {
+            "body": [
+                {
+                    "meta": {"status": "COMPLETE"},
+                    "data": [
+                        {
+                            "fileName": "list-seq.csv.gz",
+                            "urlForDownload": download_url,
+                        }
+                    ],
+                }
+            ]
+        },
+        {
+            "headers": {"Content-Type": "text/csv"},
+            "body": "symbol,date,value\nNVDA,2022-01-03,1\nMSFT,2022-01-04,2\n",
+        },
+    ]
+    transport = _MockTransport(responses)
+    client = IvolatilityClient(api_key="key", api_secret=None, transport=transport, cache_dir=tmp_path / "cache")
+
+    payload = client.fetch_async_dataset("equities/stock-market-data", {"symbols": "NVDA"}, poll_interval_s=0.0)
+
+    assert isinstance(payload, bytes)
+    text = payload.decode("utf-8").splitlines()
+    assert text[0] == "symbol,date,value"
+    assert any(line.startswith("NVDA") for line in text[1:])
+    assert len(transport.calls) == 2
+
+
+def test_async_dataset_parses_string_record(tmp_path):
+    download_url = "https://restapi.ivolatility.com/data/download/string-entry"
+    string_entry = '"[{""meta"":{""status"":""COMPLETE""},""data"":[{""fileName"":""string.csv.gz"",""urlForDownload"":""%s""}]}]"' % download_url
+    responses = [
+        {"body": {"records": [string_entry]}},
+        {
+            "headers": {"Content-Type": "text/csv"},
+            "body": "symbol,date,value\nAAPL,2024-01-01,1\n",
+        },
+    ]
+    transport = _MockTransport(responses)
+    client = IvolatilityClient(api_key="key", api_secret=None, transport=transport, cache_dir=tmp_path / "cache")
+
+    payload = client.fetch_async_dataset("equities/stock-market-data", {"symbols": "AAPL"}, poll_interval_s=0.0)
+
+    assert isinstance(payload, bytes)
+    assert payload.decode("utf-8").startswith("symbol,date,value")

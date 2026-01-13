@@ -86,9 +86,37 @@ _OI_FIELD_CANDIDATES = {
     "OPT:OI:TOTAL": ("total_open_interest", "totalOpenInterest", "openInterestTotal", "oiTotal"),
 }
 _VOLUME_FIELD_CANDIDATES = {
-    "OPT:VOL:CALL": ("call_volume", "callVolume", "volumeCall", "optVolumeCall"),
-    "OPT:VOL:PUT": ("put_volume", "putVolume", "volumePut", "optVolumePut"),
-    "OPT:VOL:TOTAL": ("total_volume", "totalVolume", "volumeTotal", "optVolumeTotal"),
+    "OPT:VOL:CALL": (
+        "call_volume",
+        "callVolume",
+        "volumeCall",
+        "optVolumeCall",
+        "optVolCall",
+        "OPT_VOL_CALL",
+    ),
+    "OPT:VOL:PUT": (
+        "put_volume",
+        "putVolume",
+        "volumePut",
+        "optVolumePut",
+        "optVolPut",
+        "OPT_VOL_PUT",
+    ),
+    "OPT:VOL:TOTAL": (
+        "total_volume",
+        "totalVolume",
+        "volumeTotal",
+        "optVolumeTotal",
+        "optVol",
+        "OPT_VOL",
+    ),
+}
+_VOLUME_RATIO_FIELD_CANDIDATES = {
+    "OPT:VOL:CALL_PUT_RATIO": (
+        "call_put_volume_ratio",
+        "callPutVolumeRatio",
+        "CALL_PUT_VOLUME_RATIO",
+    ),
 }
 _IVX_FIELD_CANDIDATES = {
     "OPT:IVX:30": ("ivx_30", "ivx30", "IVX30"),
@@ -166,6 +194,7 @@ def normalize_ivol_surface(
 
         _populate_group(entry, row, _OI_FIELD_CANDIDATES)
         _populate_group(entry, row, _VOLUME_FIELD_CANDIDATES)
+        _populate_group(entry, row, _VOLUME_RATIO_FIELD_CANDIDATES)
         _populate_group(entry, row, _IVX_FIELD_CANDIDATES)
         _populate_group(entry, row, _IVR_FIELD_CANDIDATES)
         _populate_group(entry, row, _IVP_FIELD_CANDIDATES)
@@ -185,7 +214,12 @@ def normalize_ivol_surface(
         row["OPT:OI:TOTAL"] = _resolve_total(row["OPT:OI:TOTAL"], row["OPT:OI:CALL"], row["OPT:OI:PUT"])
         row["OPT:VOL:TOTAL"] = _resolve_total(row["OPT:VOL:TOTAL"], row["OPT:VOL:CALL"], row["OPT:VOL:PUT"])
         row["OPT:OI:CALL_PUT_RATIO"] = _safe_ratio(row["OPT:OI:CALL"], row["OPT:OI:PUT"])
-        row["OPT:VOL:CALL_PUT_RATIO"] = _safe_ratio(row["OPT:VOL:CALL"], row["OPT:VOL:PUT"])
+        ratio_fallback = row["OPT:VOL:CALL_PUT_RATIO"]
+        computed_ratio = _safe_ratio(row["OPT:VOL:CALL"], row["OPT:VOL:PUT"])
+        if math.isnan(computed_ratio) and _is_number(ratio_fallback):
+            row["OPT:VOL:CALL_PUT_RATIO"] = float(ratio_fallback)
+        else:
+            row["OPT:VOL:CALL_PUT_RATIO"] = computed_ratio
         row["OPT:IVX:TERM_SLOPE_30_90"] = _compute_slope(row["OPT:IVX:30"], row["OPT:IVX:90"])
         row["OPT:IVX:TERM_SLOPE_30_180"] = _compute_slope(row["OPT:IVX:30"], row["OPT:IVX:180"])
 
@@ -361,4 +395,3 @@ __all__ = [
     "OPT_COVERAGE_COLUMNS",
     "normalize_ivol_surface",
 ]
-

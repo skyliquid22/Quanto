@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any, Callable, Mapping, MutableMapping, Protocol, Sequence
 import time
 import csv
@@ -46,6 +47,7 @@ class TransportResponse:
     status_code: int
     headers: Mapping[str, str]
     text: str
+    body: bytes
 
 
 class _TransportProtocol(Protocol):
@@ -156,7 +158,13 @@ class IvolatilityClient:
         if cached_dataset is not None:
             return cached_dataset
 
-        completion_set = {str(code).upper() for code in (completion_codes or {"COMPLETED", "SUCCESS", "DONE"})}
+        completion_set = {
+            str(code).upper()
+            for code in (
+                completion_codes
+                or {"COMPLETED", "COMPLETE", "SUCCESS", "DONE"}
+            )
+        }
         pending_set = {str(code).upper() for code in (pending_codes or {"PENDING", "RUNNING", "PROCESSING"})}
         payload = self._request_with_retry(
             resolved_endpoint,
@@ -208,6 +216,7 @@ class IvolatilityClient:
                 payload = json.loads(json_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 return None
+            payload = self._maybe_decode_nested_json(payload)
             if isinstance(payload, list):
                 normalized: list[dict[str, Any]] = []
                 for entry in payload:
@@ -216,7 +225,22 @@ class IvolatilityClient:
                 return self._normalize_records(normalized)
         bin_path = self.cache_dir / f"async-{fingerprint}.bin"
         if bin_path.exists():
-            return bin_path.read_bytes()
+            data = bin_path.read_bytes()
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                return data
+            decoded = self._decode_json_text(text)
+            if decoded is not None:
+                result = self._finalize_async_dataset(decoded, fingerprint)
+                self._write_dataset_cache(fingerprint, result)
+                return result
+            url = self._extract_download_url_from_text(text)
+            if url:
+                dataset = self._download_and_normalize_file(url)
+                self._write_dataset_cache(fingerprint, dataset)
+                return dataset
+            return data
         return None
 
     def _write_dataset_cache(self, fingerprint: str, dataset: list[dict[str, Any]] | bytes) -> None:
@@ -337,21 +361,20 @@ class IvolatilityClient:
         if code in pending_codes:
             detail_url = (
                 status.get("urlForDetails")
-                or payload.get("urlForDetails")
                 or status.get("url")
+                or payload.get("urlForDetails")
+                or payload.get("pollUrl")
             )
-            if not detail_url:
-                raise IvolatilityClientError(
-                    f"Async job pending but missing urlForDetails (fingerprint={fingerprint})"
+            if detail_url:
+                return self._poll_for_completion(
+                    str(detail_url),
+                    completion_codes,
+                    pending_codes,
+                    poll_timeout_s,
+                    poll_interval_s,
+                    fingerprint,
                 )
-            return self._poll_for_completion(
-                str(detail_url),
-                completion_codes,
-                pending_codes,
-                poll_timeout_s,
-                poll_interval_s,
-                fingerprint,
-            )
+            return payload
 
         description = status.get("description") or status.get("message") or ""
         raise IvolatilityClientError(
@@ -380,7 +403,7 @@ class IvolatilityClient:
     ) -> Mapping[str, Any]:
         deadline = time.time() + max(0, poll_timeout_s)
         interval = max(0.0, poll_interval_s)
-        params = self._credential_params_for_url(detail_url)
+        params = self._credential_params_for_url(detail_url) if detail_url else {}
         while True:
             now = time.time()
             if now >= deadline:
@@ -390,10 +413,14 @@ class IvolatilityClient:
             wait_time = min(interval, max(0.0, deadline - now))
             if wait_time > 0:
                 time.sleep(wait_time)
-            payload = self._request_with_retry(detail_url, params, use_cache=False)
+            payload = self._request_with_retry(detail_url, params, use_cache=False) if detail_url else {}
             status = self._extract_status(payload)
             if not status:
-                return payload
+                if detail_url:
+                    return payload
+                raise IvolatilityClientError(
+                    f"Async job pending but missing status payload (fingerprint={fingerprint})"
+                )
             code = self._normalize_status_code(status.get("code"))
             if not code or code in completion_codes:
                 return payload
@@ -426,22 +453,46 @@ class IvolatilityClient:
         payload: Mapping[str, Any] | Sequence[Mapping[str, Any]],
         fingerprint: str,
     ) -> list[dict[str, Any]] | bytes:
-        if isinstance(payload, Sequence) and not isinstance(payload, (Mapping, str, bytes)):
-            normalized = [dict(entry) for entry in payload if isinstance(entry, Mapping)]
-            if normalized:
-                return self._normalize_records(normalized)
-        records = self._extract_records(payload) if isinstance(payload, Mapping) else []
-        if records:
-            return self._normalize_records(records)
+        records: list[dict[str, Any]] = []
+        if isinstance(payload, Mapping):
+            records = self._extract_records(payload)
+            if records:
+                for record in records:
+                    download_url = self._extract_download_url(record)
+                    if download_url:
+                        return self._download_and_normalize_file(download_url)
+                return self._normalize_records(records)
         download_url = self._extract_download_url(payload)
         if download_url:
             return self._download_and_normalize_file(download_url)
+        if isinstance(payload, Sequence) and not isinstance(payload, (Mapping, str, bytes)):
+            normalized_entries = [dict(entry) for entry in payload if isinstance(entry, Mapping)]
+            for entry in normalized_entries:
+                download_url = self._extract_download_url(entry)
+                if download_url:
+                    return self._download_and_normalize_file(download_url)
+            if normalized_entries:
+                return self._normalize_records(normalized_entries)
+            return []
+        if isinstance(payload, (str, bytes)):
+            text = payload.decode("utf-8", errors="ignore") if isinstance(payload, bytes) else payload
+            url = self._extract_download_url_from_text(text)
+            if url:
+                return self._download_and_normalize_file(url)
         raise IvolatilityClientError(
             f"Async job completed without data payload (fingerprint={fingerprint})"
         )
 
     def _extract_download_url(self, payload: Mapping[str, Any] | Sequence[Mapping[str, Any]]) -> str | None:
         if isinstance(payload, Mapping):
+            direct = payload.get("__download_url")
+            if isinstance(direct, str) and direct.strip():
+                return direct.strip()
+            raw_text = payload.get("__raw_text")
+            if isinstance(raw_text, str):
+                candidate = self._extract_download_url_from_text(raw_text)
+                if candidate:
+                    return candidate
             candidates = (
                 "urlForDownload",
                 "downloadUrl",
@@ -451,6 +502,7 @@ class IvolatilityClient:
                 "fileURL",
                 "urlForResult",
                 "resultUrl",
+                "urlForDetails",
             )
             for key in candidates:
                 value = payload.get(key)
@@ -468,23 +520,92 @@ class IvolatilityClient:
                     value = data.get(key)
                     if isinstance(value, str) and value.strip():
                         return value.strip()
+            if isinstance(data, Sequence):
+                for entry in data:
+                    url = self._extract_download_url(entry)
+                    if url:
+                        return url
+            file_name = payload.get("fileName") or payload.get("filename")
+            if isinstance(file_name, str) and file_name.strip():
+                return f"{self.base_url.rstrip('/')}/data/download/{file_name.strip()}"
+        if isinstance(payload, Sequence):
+            for entry in payload:
+                url = self._extract_download_url(entry)
+                if url:
+                    return url
+        return None
+
+    def _extract_download_url_from_text(self, text: str) -> str | None:
+        marker = "urlForDownload"
+        idx = text.find(marker)
+        if idx != -1:
+            idx = text.find("http", idx)
+            if idx != -1:
+                end = idx
+                while end < len(text) and text[end] not in {'"', "'", "\\", " ", "\n", "\r", ","}:
+                    end += 1
+                candidate = text[idx:end]
+                if candidate.startswith("http"):
+                    return candidate
+        match = re.search(r'fileName"+"?\s*:\s*"+([^"\s]+)', text)
+        if match:
+            file_name = match.group(1)
+            if file_name:
+                return f"{self.base_url.rstrip('/')}/data/download/{file_name}"
+        return None
+
+    def _decode_json_text(self, text: str) -> Any | None:
+        stripped = text.strip()
+        if not stripped:
+            return None
+        candidates = [stripped]
+        if stripped.startswith('"') and stripped.endswith('"'):
+            collapsed = stripped[1:-1].replace('""', '"')
+            candidates.append(collapsed)
+        for candidate in candidates:
+            candidate = candidate.strip()
+            if not candidate:
+                continue
+            if candidate.startswith("{") or candidate.startswith("["):
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
         return None
 
     def _download_and_normalize_file(self, url: str) -> bytes:
         params = self._credential_params_for_url(url)
-        response = self._request_with_retry(
-            url,
-            params,
-            use_cache=False,
-            parse_json=False,
-        )
-        if not isinstance(response, TransportResponse):  # pragma: no cover - defensive
-            raise IvolatilityClientError("Transport returned unexpected payload for download")
-        content_type = (response.headers.get("Content-Type") or "").lower()
-        text = response.text or ""
-        if "csv" in content_type or self._looks_like_csv(text):
-            return self._canonicalize_csv_bytes(text)
-        return text.encode("utf-8")
+        delay = max(1.0, self.backoff_factor)
+        deadline = time.time() + max(30, self.max_backoff * 3)
+        while True:
+            response = self._request_with_retry(
+                url,
+                params,
+                use_cache=False,
+                parse_json=False,
+            )
+            if not isinstance(response, TransportResponse):  # pragma: no cover - defensive
+                raise IvolatilityClientError("Transport returned unexpected payload for download")
+            raw_bytes = response.body
+            text = response.text or ""
+            lower_text = text.lower()
+            if 'status:"pending"' in lower_text or 'status":"pending"' in lower_text:
+                if time.time() >= deadline:
+                    raise IvolatilityClientError("Download URL remained pending after retries")
+                time.sleep(min(delay, self.max_backoff))
+                delay = min(delay * 1.5, self.max_backoff)
+                continue
+            content_type = (response.headers.get("Content-Type") or "").lower()
+            if "gzip" in content_type or raw_bytes.startswith(b"\x1f\x8b"):
+                try:
+                    text = gzip.decompress(raw_bytes).decode("utf-8")
+                except Exception:
+                    pass
+                else:
+                    return self._canonicalize_csv_bytes(text)
+            if "csv" in content_type or self._looks_like_csv(text):
+                return self._canonicalize_csv_bytes(text)
+            return raw_bytes or text.encode("utf-8")
 
     def _canonicalize_csv_bytes(self, text: str) -> bytes:
         reader = csv.DictReader(io.StringIO(text), delimiter=",")
@@ -566,9 +687,26 @@ class IvolatilityClient:
 
         normalized: list[dict[str, Any]] = []
         for entry in records:
-            if not isinstance(entry, Mapping):
-                raise IvolatilityClientError("API returned a non-mapping record")
-            normalized.append(dict(entry))
+            if isinstance(entry, Mapping):
+                normalized.append(dict(entry))
+                continue
+            if isinstance(entry, str):
+                decoded = self._decode_json_text(entry)
+                if decoded is None:
+                    url = self._extract_download_url_from_text(entry)
+                    if url:
+                        normalized.append({"__download_url": url})
+                    else:
+                        normalized.append({"__raw_text": entry})
+                    continue
+                if isinstance(decoded, Mapping):
+                    normalized.append(dict(decoded))
+                elif isinstance(decoded, list):
+                    for item in decoded:
+                        if isinstance(item, Mapping):
+                            normalized.append(dict(item))
+                continue
+            raise IvolatilityClientError("API returned a non-mapping record")
         return normalized
 
     def _extract_next_token(self, payload: Mapping[str, Any]) -> str | None:
@@ -639,21 +777,16 @@ class IvolatilityClient:
 
     def _parse_payload(self, response: TransportResponse) -> Mapping[str, Any]:
         text = response.text or ""
+        decoded = self._decode_json_text(text)
         stripped = text.lstrip()
         content_type = (response.headers.get("Content-Type") or "").lower()
-        # JSON payloads
+        if decoded is not None:
+            if isinstance(decoded, Mapping):
+                return decoded
+            if isinstance(decoded, list):
+                return {"records": decoded}
         if not stripped:
             return {}
-        if "json" in content_type or stripped.startswith("{") or stripped.startswith("["):
-            try:
-                parsed = json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                raise IvolatilityClientError(f"Invalid JSON response: {exc}") from exc
-            if isinstance(parsed, Mapping):
-                return parsed
-            if isinstance(parsed, list):
-                return {"records": parsed}
-            raise IvolatilityClientError("Unexpected JSON payload received from API")
         # CSV payloads
         first_line = stripped.splitlines()[0] if stripped else ""
         if "csv" in content_type or "," in first_line:
@@ -662,6 +795,13 @@ class IvolatilityClient:
         raise IvolatilityClientError(
             f"Unsupported response content-type '{response.headers.get('Content-Type')}'"
         )
+
+    def _maybe_decode_nested_json(self, value: Any) -> Any:
+        if isinstance(value, str):
+            decoded = self._decode_json_text(value)
+            if decoded is not None:
+                return decoded
+        return value
 
 
 def _default_transport(
@@ -693,18 +833,21 @@ def _default_transport(
                     raw = gzip.decompress(raw)
                 except OSError:
                     raw = raw
-            text = raw.decode("utf-8")
+            text = raw.decode("utf-8", errors="replace")
             return TransportResponse(
                 status_code=response.getcode(),
                 headers=dict(response.headers.items()),
                 text=text,
+                body=raw,
             )
     except urllib_error.HTTPError as exc:  # pragma: no cover - exercised only when real HTTP fails
-        body = exc.read().decode("utf-8") if exc.fp else ""
+        raw = exc.read() if exc.fp else b""
+        text = raw.decode("utf-8", errors="replace")
         return TransportResponse(
             status_code=exc.code,
             headers=dict(exc.headers.items()) if exc.headers else {},
-            text=body,
+            text=text,
+            body=raw,
         )
     except urllib_error.URLError as exc:  # pragma: no cover - exercised only when transport unavailable
         raise IvolatilityClientError(f"Transport error contacting iVolatility: {exc}") from exc

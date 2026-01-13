@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -112,8 +113,30 @@ class EquityIngestionPipeline:
 
     def _collect_records(self, request: EquityIngestionRequest, mode: Mode) -> List[Dict[str, Any]]:
         if mode == "rest":
-            return asyncio.run(self.adapter.fetch_equity_ohlcv_rest(request))
+            return asyncio.run(self._collect_rest_records_async(request))
         return list(self.adapter.stream_flat_file_equity_bars(request))
+
+    async def _collect_rest_records_async(self, request: EquityIngestionRequest) -> List[Dict[str, Any]]:
+        try:
+            return await self.adapter.fetch_equity_ohlcv_rest(request)
+        finally:
+            await self._async_close_adapter()
+
+    async def _async_close_adapter(self) -> None:
+        close_method = getattr(self.adapter, "aclose", None)
+        if callable(close_method):
+            result = close_method()
+            if inspect.isawaitable(result):
+                await result
+
+        rest_client = getattr(self.adapter, "rest_client", None)
+        if rest_client is None:
+            return
+        client_close = getattr(rest_client, "aclose", None)
+        if callable(client_close):
+            result = client_close()
+            if inspect.isawaitable(result):
+                await result
 
     def _source_file_metadata(self, request: EquityIngestionRequest) -> List[Dict[str, Any]]:
         metadata: List[Dict[str, Any]] = []

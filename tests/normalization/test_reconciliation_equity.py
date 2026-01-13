@@ -141,6 +141,58 @@ def test_equity_reconciliation_prefers_primary_with_fallback(tmp_path):
     assert not (canonical_root / "equity_ohlcv" / "AAPL" / "daily" / "2023" ).exists()
 
 
+def test_equity_canonical_rewrite_overwrites_existing_files(tmp_path):
+    raw_root = tmp_path / "raw"
+    manifest_root = tmp_path / "manifests"
+    canonical_root = tmp_path / "canonical"
+    metrics_root = tmp_path / "metrics"
+
+    polygon_path = raw_root / "polygon" / "equity_ohlcv" / "NVDA" / "daily" / "2022" / "01" / "03.parquet"
+    records = [
+        {
+            "symbol": "NVDA",
+            "timestamp": datetime(2022, 1, 3, 16, tzinfo=UTC),
+            "open": 100,
+            "high": 110,
+            "low": 95,
+            "close": 105,
+            "volume": 123,
+        }
+    ]
+    write_parquet_atomic(records, polygon_path)
+    file_hash = compute_file_hash(polygon_path)
+    _write_manifest(manifest_root, "equity_ohlcv", "polygon_run", "polygon", file_hashes=[file_hash])
+
+    config = {
+        "reconciliation": {
+            "domains": {
+                "equity_ohlcv": {
+                    "vendor_priority": ["polygon"],
+                }
+            }
+        }
+    }
+    builder = ReconciliationBuilder(
+        config,
+        raw_data_root=raw_root,
+        canonical_root=canonical_root,
+        validation_manifest_root_path=manifest_root,
+        metrics_root=metrics_root,
+        now=datetime(2023, 1, 5, tzinfo=UTC),
+    )
+
+    builder.run(domains=["equity_ohlcv"], start_date=date(2022, 1, 3), end_date=date(2022, 1, 3), run_id="first")
+    target_path = canonical_root / "equity_ohlcv" / "NVDA" / "daily" / "2022.parquet"
+    initial = _load_records(builder, target_path)
+    assert len(initial) == 1
+
+    builder.run(domains=["equity_ohlcv"], start_date=date(2022, 1, 3), end_date=date(2022, 1, 3), run_id="second")
+    rewritten = _load_records(builder, target_path)
+    assert len(rewritten) == 1
+    assert rewritten[0]["close"] == initial[0]["close"]
+    assert rewritten[0]["validation_status"] == "passed"
+
+
 def test_equity_reconciliation_handles_yearly_raw_shards(tmp_path):
     raw_root = tmp_path / "raw"
     manifest_root = tmp_path / "manifests"

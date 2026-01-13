@@ -497,6 +497,8 @@ class ReconciliationBuilder:
             dedup_cols = ["symbol", "timestamp"]
             if entries and "source_vendor" in entries[0]:
                 dedup_cols.append("source_vendor")
+            if path.exists():
+                path.unlink()
             result = merge_write_parquet(path, entries, dedup_cols=dedup_cols, sort_key="timestamp")
             outputs.append(
                 {
@@ -894,14 +896,16 @@ class ReconciliationBuilder:
     def _load_manifests(self, domain: str) -> Dict[str, ManifestInfo]:
         manifests: Dict[str, ManifestInfo] = {}
         seen_paths: set[Path] = set()
-        candidate_dirs = [self.validation_manifest_root / domain]
+        candidate_dirs = [self.validation_manifest_root / domain, self.validation_manifest_root]
         if self.raw_data_root.exists():
             for vendor_dir in self.raw_data_root.iterdir():
                 if not vendor_dir.is_dir():
                     continue
                 manifest_dir = vendor_dir / domain / "manifests"
                 candidate_dirs.append(manifest_dir)
-                candidate_dirs.append(manifest_dir / "validation")
+                validation_dir = manifest_dir / "validation"
+                candidate_dirs.append(validation_dir)
+                candidate_dirs.append(validation_dir / domain)
         for directory in candidate_dirs:
             if not directory.exists():
                 continue

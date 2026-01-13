@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Sequence, Tuple
 import logging
@@ -24,6 +24,10 @@ from research.datasets.canonical_options_loader import CanonicalOptionData, load
 from research.features.equity_xsec_features_v1 import EQUITY_XSEC_OBSERVATION_COLUMNS
 from research.features.options_features_v1 import OPTION_FEATURE_COLUMNS, compute_options_features
 from research.features.sets.opts_surface_v1 import OPTIONS_SURFACE_FEATURE_COLUMNS
+from research.features.sets.options_surface_v1 import (
+    OPTIONS_SURFACE_V1_COLUMNS,
+    build_options_surface_v1_features,
+)
 from research.features.regime_features_v1 import REGIME_FEATURE_COLUMNS, compute_regime_features
 from research.regime import RegimeState
 from research.strategies.sma_crossover import SMAStrategyResult
@@ -97,7 +101,21 @@ class _FeatureSetSpec:
     name: str
     observation_columns: Tuple[str, ...]
     requires_options: bool
-    builder: Callable[["pd.DataFrame", CanonicalOptionData | None], "pd.DataFrame"]
+    builder: Callable[
+        ["pd.DataFrame", CanonicalOptionData | None, "FeatureBuildContext"],
+        "pd.DataFrame",
+    ]
+
+
+@dataclass(frozen=True)
+class FeatureBuildContext:
+    """Context shared with feature builders for deterministic joins."""
+
+    symbol: str
+    start_date: date
+    end_date: date
+    data_root: Path | None
+    inputs_used: Dict[str, str]
 
 
 _UNIVERSE_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
@@ -172,17 +190,32 @@ def build_features(
     spec = _FEATURE_REGISTRY[normalized_name]
     prepared = _prepare_equity_frame(equity_df)
 
+    start = _coerce_date(start_date)
+    end = _coerce_date(end_date)
+    if end < start:
+        raise ValueError("end_date must be greater than or equal to start_date")
+    symbol = _normalize_symbol(underlying_symbol)
+    resolved_root = Path(data_root) if data_root else None
+
     feature_hashes: Dict[str, str] = {}
+    context = FeatureBuildContext(
+        symbol=symbol,
+        start_date=start,
+        end_date=end,
+        data_root=resolved_root,
+        inputs_used=feature_hashes,
+    )
     options_payload = options_data
     if spec.requires_options:
-        options_payload, feature_hashes = _load_options_payload(
-            underlying_symbol,
-            start_date,
-            end_date,
-            data_root=data_root,
+        options_payload, option_hashes = _load_options_payload(
+            symbol,
+            start,
+            end,
+            data_root=resolved_root,
             options_data=options_data,
         )
-    frame = spec.builder(prepared.copy(), options_payload)
+        feature_hashes.update(option_hashes)
+    frame = spec.builder(prepared.copy(), options_payload, context)
     frame.sort_values("timestamp", inplace=True, kind="mergesort")
     frame.reset_index(drop=True, inplace=True)
     frame = _order_columns(frame, spec.observation_columns)
@@ -239,6 +272,21 @@ def observation_columns_for_feature_set(feature_set: str) -> Tuple[str, ...]:
     raise ValueError(f"Unknown feature set '{feature_set}'")
 
 
+def _coerce_date(value: date | str) -> date:
+    if isinstance(value, date):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    return datetime.fromisoformat(str(value)).date()
+
+
+def _normalize_symbol(symbol: str) -> str:
+    normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        raise ValueError("underlying_symbol must be provided")
+    return normalized
+
+
 def _prepare_equity_frame(equity_df: "pd.DataFrame") -> "pd.DataFrame":
     if "timestamp" not in equity_df or "close" not in equity_df:
         raise ValueError("equity_df must include timestamp and close columns")
@@ -254,11 +302,19 @@ def _prepare_equity_frame(equity_df: "pd.DataFrame") -> "pd.DataFrame":
     return frame
 
 
-def _sma_only_builder(equity_df: "pd.DataFrame", _: CanonicalOptionData | None) -> "pd.DataFrame":
+def _sma_only_builder(
+    equity_df: "pd.DataFrame",
+    _: CanonicalOptionData | None,
+    __: FeatureBuildContext,
+) -> "pd.DataFrame":
     return equity_df
 
 
-def _options_only_builder(equity_df: "pd.DataFrame", options: CanonicalOptionData | None) -> "pd.DataFrame":
+def _options_only_builder(
+    equity_df: "pd.DataFrame",
+    options: CanonicalOptionData | None,
+    __: FeatureBuildContext,
+) -> "pd.DataFrame":
     if options is None:
         raise ValueError("options data is required for options feature sets")
     merged = compute_options_features(
@@ -270,7 +326,11 @@ def _options_only_builder(equity_df: "pd.DataFrame", options: CanonicalOptionDat
     return merged
 
 
-def _core_v1_builder(equity_df: "pd.DataFrame", _: CanonicalOptionData | None) -> "pd.DataFrame":
+def _core_v1_builder(
+    equity_df: "pd.DataFrame",
+    _: CanonicalOptionData | None,
+    __: FeatureBuildContext,
+) -> "pd.DataFrame":
     return compute_core_features_v1(equity_df)
 
 
@@ -453,6 +513,12 @@ _FEATURE_REGISTRY: Dict[str, _FeatureSetSpec] = {
         requires_options=False,
         builder=_core_v1_builder,
     ),
+    "options_surface_v1": _FeatureSetSpec(
+        name="options_surface_v1",
+        observation_columns=OPTIONS_SURFACE_V1_COLUMNS,
+        requires_options=False,
+        builder=build_options_surface_v1_features,
+    ),
 
 }
 
@@ -460,6 +526,7 @@ _FEATURE_REGISTRY: Dict[str, _FeatureSetSpec] = {
 __all__ = [
     "FeatureSetResult",
     "UniverseFeaturePanel",
+    "FeatureBuildContext",
     "build_features",
     "build_universe_feature_panel",
     "strategy_to_feature_frame",

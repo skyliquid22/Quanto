@@ -1,0 +1,32 @@
+# Polygon equity backfill ingest (daily bars)
+vendor: polygon
+mode: rest
+
+domain_defaults:
+  equity_ohlcv:
+    interval: daily
+
+symbols:
+  - AAPL
+  - MSFT
+  - NVDA
+  - AVGO
+  - ORCL
+  - ADBE
+  - CRM
+  - AMD
+  - CSCO
+  - QCOM
+  - TXN
+  - ACN
+  - INTC
+  - IBM
+  - NOW
+  - AMAT
+  - PANW
+  - INTU
+  - ADP
+  - MU
+
+start_date: "2022-01-01"
+end_date: "2025-12-31"

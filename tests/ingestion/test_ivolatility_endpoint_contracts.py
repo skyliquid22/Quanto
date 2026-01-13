@@ -15,8 +15,10 @@ from infra.ingestion.adapters import (
     EquityIngestionRequest,
     IvolatilityEquityAdapter,
     IvolatilityOptionsAdapter,
+    IvolatilityOptionsSurfaceAdapter,
     OptionReferenceIngestionRequest,
     OptionTimeseriesIngestionRequest,
+    OptionsSurfaceIngestionRequest,
 )
 
 
@@ -41,7 +43,19 @@ class _RecordingClient:
         return [dict(entry) for entry in payload]
 
     def fetch_async_dataset(self, endpoint, params):
-        return self.fetch(endpoint, params)
+        params_copy = dict(params)
+        self.calls.append({"endpoint": endpoint, "params": params_copy})
+        key = (
+            endpoint,
+            params_copy.get("symbols"),
+            params_copy.get("from"),
+            params_copy.get("to"),
+        )
+        if key in self.responses:
+            payload = self.responses[key]
+        else:
+            payload = self.responses.get((endpoint,), [])
+        return [dict(entry) for entry in payload]
 
 
 def test_equity_bulk_endpoint_and_params():
@@ -212,3 +226,43 @@ def test_single_option_endpoint_params():
     assert params["symbol"] == "AAPL240119C00150000"
     assert params["from"] == "2024-01-01"
     assert params["to"] == "2024-01-03"
+
+
+def test_options_surface_batches_symbols_per_year():
+    endpoint = IvolatilityOptionsSurfaceAdapter.DEFAULT_ENDPOINT
+    responses = {
+        (endpoint, "AAA,BBB,CCC", "2022-01-01", "2022-12-31"): [
+            {"symbol": "AAA", "tradeDate": "2022-01-03"},
+            {"symbol": "BBB", "tradeDate": "2022-01-04"},
+        ],
+        (endpoint, "DDD", "2022-01-01", "2022-12-31"): [{"symbol": "DDD", "tradeDate": "2022-01-05"}],
+        (endpoint, "AAA,BBB,CCC", "2023-01-01", "2023-12-31"): [
+            {"symbol": "AAA", "tradeDate": "2023-02-01"},
+            {"symbol": "BBB", "tradeDate": "2023-02-02"},
+        ],
+        (endpoint, "DDD", "2023-01-01", "2023-12-31"): [{"symbol": "DDD", "tradeDate": "2023-02-03"}],
+    }
+    client = _RecordingClient(responses)
+    adapter = IvolatilityOptionsSurfaceAdapter(client, vendor="ivolatility", config={})
+    request = OptionsSurfaceIngestionRequest(
+        symbols=("CCC", "AAA", "BBB", "DDD"),
+        start_date=date(2022, 1, 1),
+        end_date=date(2023, 12, 31),
+        vendor="ivolatility",
+        options={},
+        vendor_params={},
+    )
+
+    rows, manifest = adapter.fetch_surface(request)
+
+    assert len(rows) == 6
+    assert len(client.calls) == 4
+    seen_batches = {(call["params"]["symbols"], call["params"]["from"], call["params"]["to"]) for call in client.calls}
+    assert (
+        ("AAA,BBB,CCC", "2022-01-01", "2022-12-31") in seen_batches
+        and ("DDD", "2022-01-01", "2022-12-31") in seen_batches
+        and ("AAA,BBB,CCC", "2023-01-01", "2023-12-31") in seen_batches
+        and ("DDD", "2023-01-01", "2023-12-31") in seen_batches
+    )
+    assert "requests" in manifest
+    assert len(manifest["requests"]) == 4

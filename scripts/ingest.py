@@ -375,14 +375,14 @@ def _handle_options_surface(
         vendor=normalized.vendor,
         config=normalized.vendor_params or None,
     )
-    rows, params = adapter.fetch_surface(request)
+    rows, metadata = adapter.fetch_surface(request)
     creation_ts = _deterministic_creation_timestamp(run_id)
     manifest = storage.persist(
         rows,
         request=request,
         run_id=run_id,
         endpoint=adapter.endpoint,
-        params=params,
+        params=metadata or {},
         created_at=creation_ts,
     )
     return _success_summary(normalized, run_id, mode, route.adapter_name, config_path, manifest)
@@ -547,7 +547,6 @@ def _instantiate_equity_adapter(
             if not api_key:
                 raise RuntimeError("Polygon REST ingestion requested but no POLYGON_API_KEY provided")
             rest_client = PolygonRESTClient(api_key, timeout=float(rest_cfg_local.get("timeout", 30.0)))
-            cleanup_callbacks.append(lambda rc=rest_client: asyncio.run(rc.aclose()))
         adapter = PolygonEquityAdapter(
             rest_client=rest_client,
             rest_config=rest_cfg_local or None,

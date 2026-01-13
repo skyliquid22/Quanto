@@ -1,0 +1,31 @@
+# configs/ingest_options_surface_ivol_smoke.yml
+#
+# Real iVolatility smoke ingest for options_surface_v1 (run the CLI with
+# `python -m scripts.ingest --domain options_surface_v1 ...`).
+# Tweaks allowed: update dates/symbols. Everything else can stay fixed.
+
+vendor: ivolatility
+mode: rest
+
+symbols:
+  - AAPL
+  - MSFT
+  - NVDA
+
+# Two-trading-day window. Adjust if you want a different slice.
+start_date: "2025-12-15"
+end_date:   "2025-12-16"
+
+ivolatility:
+  # Client respects IVOLATILITY_API_KEY env var; set it before running the CLI.
+  timeout: 90
+  max_retries: 5
+  backoff_factor: 2.0
+  cache_dir: ".quanto_data/cache/ivol_surface_smoke"
+  vol_unit: percent
+  params:
+    format: json
+
+options:
+  # Adapter-specific knobs (currently unused but kept for future toggles)
+  notes: "Smoke ingest for options_surface_v1"

@@ -30,7 +30,12 @@ class _FakeTransport:
         payload = self.responses.pop(0)
         status = payload.get("status", 200)
         body = json.dumps(payload.get("body", {}))
-        return TransportResponse(status_code=status, headers=payload.get("headers", {}), text=body)
+        return TransportResponse(
+            status_code=status,
+            headers=payload.get("headers", {}),
+            text=body,
+            body=body.encode("utf-8"),
+        )
 
 
 def test_ivolatility_client_paginates_and_sorts_records():

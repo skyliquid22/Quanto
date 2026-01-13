@@ -173,7 +173,9 @@ class OptionsSurfaceStorage:
 class IvolatilityOptionsSurfaceAdapter:
     """Adapter coordinating vendor fetch + normalization for surface ingestion."""
 
-    DEFAULT_ENDPOINT = "equities/options-surface/bulk"
+    # iVolatility bulk surface metrics live on the stock-market-data endpoint.
+    DEFAULT_ENDPOINT = "equities/stock-market-data"
+    DEFAULT_SYMBOLS_PER_REQUEST = 3
 
     def __init__(
         self,
@@ -188,39 +190,55 @@ class IvolatilityOptionsSurfaceAdapter:
         self.endpoint = cfg.get("endpoint", self.DEFAULT_ENDPOINT)
         self.extra_params = dict(cfg.get("params") or {})
         self.vol_unit = str(cfg.get("vol_unit", "percent"))
+        self.symbols_per_request = max(1, int(cfg.get("symbols_per_request", self.DEFAULT_SYMBOLS_PER_REQUEST)))
 
     def fetch_surface(
         self,
         request: OptionsSurfaceIngestionRequest,
     ) -> tuple[list[dict[str, Any]], Mapping[str, Any]]:
-        params, sorted_symbols = self._build_params(request)
-        payload = self.client.fetch_async_dataset(self.endpoint, params)
-        records = self._coerce_dataset(payload)
-        rows = normalize_ivol_surface(
-            records,
-            allowed_symbols=sorted_symbols,
-            start_date=request.start_date,
-            end_date=request.end_date,
-            vol_unit=self.vol_unit,
-        )
-        sanitized = self._sanitize_manifest_params(params, sorted_symbols)
-        return rows, sanitized
-
-    def _build_params(self, request: OptionsSurfaceIngestionRequest) -> tuple[dict[str, Any], tuple[str, ...]]:
-        base = IvolatilityClient.map_date_params(start_date=request.start_date, end_date=request.end_date)
-        symbols = tuple(sorted(request.symbols))
-        if not symbols:
+        sorted_symbols = tuple(sorted(request.symbols))
+        if not sorted_symbols:
             raise ValueError("options_surface_v1 ingestion requires at least one symbol")
+        all_rows: list[dict[str, Any]] = []
+        manifest_chunks: list[Mapping[str, Any]] = []
+        for window_start, window_end in self._iter_year_windows(request.start_date, request.end_date):
+            for batch in self._chunk_symbols(sorted_symbols):
+                params = self._build_params(batch, window_start, window_end)
+                payload = self.client.fetch_async_dataset(self.endpoint, params)
+                records = self._coerce_dataset(payload)
+                if not records:
+                    resolved_records = self._resolve_remote_payload(payload)
+                    if resolved_records:
+                        records = resolved_records
+                rows = normalize_ivol_surface(
+                    records,
+                    allowed_symbols=batch,
+                    start_date=window_start,
+                    end_date=window_end,
+                    vol_unit=self.vol_unit,
+                )
+                all_rows.extend(rows)
+                manifest_chunks.append(self._sanitize_manifest_params(params, batch))
+        sanitized = {"requests": manifest_chunks}
+        return all_rows, sanitized
+
+    def _build_params(
+        self,
+        symbols: Sequence[str],
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Any]:
+        base = IvolatilityClient.map_date_params(start_date=start_date, end_date=end_date)
         base["symbols"] = ",".join(symbols)
         for key, value in self.extra_params.items():
             base[key] = value
-        return base, symbols
+        return base
 
     def _coerce_dataset(self, payload: List[Mapping[str, Any]] | bytes | str | Any) -> List[Mapping[str, Any]]:
         if isinstance(payload, list):
             return [dict(entry) for entry in payload if isinstance(entry, Mapping)]
         if isinstance(payload, bytes):
-            text = payload.decode("utf-8")
+            text = payload.decode("utf-8", errors="ignore")
             return self._parse_csv(text)
         if isinstance(payload, str):
             text = payload.strip()
@@ -242,6 +260,24 @@ class IvolatilityOptionsSurfaceAdapter:
         reader = csv.DictReader(io.StringIO(text))
         return [dict(row) for row in reader]
 
+    def _resolve_remote_payload(self, payload: Any) -> List[Mapping[str, Any]]:
+        text: str | None = None
+        if isinstance(payload, bytes):
+            text = payload.decode("utf-8", errors="ignore")
+        elif isinstance(payload, str):
+            text = payload
+        if not text:
+            return []
+        url = self.client._extract_download_url_from_text(text)
+        if not url:
+            return []
+        csv_bytes = self.client._download_and_normalize_file(url)
+        try:
+            csv_text = csv_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            return []
+        return self._parse_csv(csv_text)
+
     def _sanitize_manifest_params(
         self,
         params: Mapping[str, Any],
@@ -256,6 +292,19 @@ class IvolatilityOptionsSurfaceAdapter:
                 continue
             sanitized[str(key)] = value
         return sanitized
+
+    def _iter_year_windows(self, start_date: date, end_date: date) -> Iterable[tuple[date, date]]:
+        start_year = start_date.year
+        end_year = end_date.year
+        for year in range(start_year, end_year + 1):
+            window_start = date(year, 1, 1)
+            window_end = date(year, 12, 31)
+            yield max(start_date, window_start), min(end_date, window_end)
+
+    def _chunk_symbols(self, symbols: Sequence[str]) -> Iterable[tuple[str, ...]]:
+        chunk_size = self.symbols_per_request
+        for idx in range(0, len(symbols), chunk_size):
+            yield tuple(symbols[idx : idx + chunk_size])
 
 
 __all__ = [

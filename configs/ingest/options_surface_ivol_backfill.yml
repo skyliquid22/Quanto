@@ -1,0 +1,40 @@
+# iVolatility options surface backfill (derived surface metrics)
+vendor: ivolatility
+mode: rest
+
+symbols:
+  - AAPL
+  - MSFT
+  - NVDA
+  - AVGO
+  - ORCL
+  - ADBE
+  - CRM
+  - AMD
+  - CSCO
+  - QCOM
+  - TXN
+  - ACN
+  - INTC
+  - IBM
+  - NOW
+  - AMAT
+  - PANW
+  - INTU
+  - ADP
+  - MU
+
+start_date: "2022-01-01"
+end_date: "2025-12-31"
+
+ivolatility:
+  timeout: 120
+  max_retries: 6
+  backoff_factor: 2.5
+  cache_dir: ".quanto_data/cache/options_surface_backfill"
+  vol_unit: percent
+  params:
+    format: json
+
+options:
+  notes: "Backfill run for options_surface_v1 derived metrics"
