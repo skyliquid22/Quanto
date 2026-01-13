@@ -9,6 +9,7 @@ from .adapters import (
     EquityIngestionRequest,
     IvolatilityEquityAdapter,
     IvolatilityOptionsAdapter,
+    IvolatilityOptionsSurfaceAdapter,
     FundamentalsIngestionRequest,
     OptionReferenceIngestionRequest,
     OptionTimeseriesIngestionRequest,
@@ -24,6 +25,7 @@ Domain = Literal[
     "option_contract_ohlcv",
     "option_open_interest",
     "fundamentals",
+    "options_surface_v1",
 ]
 
 
@@ -127,6 +129,9 @@ class IngestionRouter:
             return "flat_file"
         return "rest"
 
+    def route_options_surface_v1(self) -> Mode:
+        return "rest"
+
     def _route_timeseries(self, *, total_days: int, total_symbols: int, has_flat_files: bool) -> Mode:
         cfg = self.config
         if cfg.force_mode:
@@ -218,6 +223,12 @@ class IngestionRouter:
             vendor="ivolatility",
             mode="rest",
             adapter=IvolatilityOptionsAdapter,
+        )
+        registry[("options_surface_v1", "ivolatility", "rest")] = AdapterRoute(
+            domain="options_surface_v1",
+            vendor="ivolatility",
+            mode="rest",
+            adapter=IvolatilityOptionsSurfaceAdapter,
         )
         return registry
 

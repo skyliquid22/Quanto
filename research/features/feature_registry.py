@@ -23,6 +23,7 @@ else:  # pragma: no cover
 from research.datasets.canonical_options_loader import CanonicalOptionData, load_canonical_options
 from research.features.equity_xsec_features_v1 import EQUITY_XSEC_OBSERVATION_COLUMNS
 from research.features.options_features_v1 import OPTION_FEATURE_COLUMNS, compute_options_features
+from research.features.sets.opts_surface_v1 import OPTIONS_SURFACE_FEATURE_COLUMNS
 from research.features.regime_features_v1 import REGIME_FEATURE_COLUMNS, compute_regime_features
 from research.regime import RegimeState
 from research.strategies.sma_crossover import SMAStrategyResult
@@ -69,6 +70,7 @@ CORE_V1_XSEC_OBSERVATION_COLUMNS = _merge_observation_columns(
     tuple(column for column in EQUITY_XSEC_OBSERVATION_COLUMNS if column != "close"),
     warning_label="core_v1_xsec",
 )
+CORE_V1_XSEC_REGIME_OPTS_COLUMNS = CORE_V1_XSEC_OBSERVATION_COLUMNS + tuple(OPTIONS_SURFACE_FEATURE_COLUMNS)
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,7 @@ _UNIVERSE_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "core_v1_regime": CORE_V1_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
     "core_v1_xsec": CORE_V1_XSEC_OBSERVATION_COLUMNS,
     "core_v1_xsec_regime": CORE_V1_XSEC_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
+    "core_v1_xsec_regime_opts_v1": CORE_V1_XSEC_REGIME_OPTS_COLUMNS + REGIME_FEATURE_COLUMNS,
 }
 _REGIME_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "regime_v1": REGIME_FEATURE_COLUMNS,
@@ -116,6 +119,7 @@ _FEATURE_SET_DEFAULT_REGIME: Dict[str, str] = {
     "xsec_plus_regime_v1": "regime_v1",
     "core_v1_regime": "regime_v1",
     "core_v1_xsec_regime": "regime_v1",
+    "core_v1_xsec_regime_opts_v1": "regime_v1",
 }
 
 
@@ -464,6 +468,7 @@ __all__ = [
     "SMA_PLUS_XSEC_OBSERVATION_COLUMNS",
     "EQUITY_XSEC_OBSERVATION_COLUMNS",
     "CORE_V1_XSEC_OBSERVATION_COLUMNS",
+    "CORE_V1_XSEC_REGIME_OPTS_COLUMNS",
     "normalize_feature_set_name",
     "normalize_regime_feature_set_name",
     "is_universe_feature_set",

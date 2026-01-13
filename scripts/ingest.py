@@ -5,17 +5,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, MutableMapping, Sequence
 
 from infra.ingestion.adapters import (
     EquityIngestionRequest,
     FundamentalsIngestionRequest,
+    IvolatilityOptionsSurfaceAdapter,
     OptionReferenceIngestionRequest,
     OptionTimeseriesIngestionRequest,
+    OptionsSurfaceIngestionRequest,
+    OptionsSurfaceStorage,
     PolygonEquityAdapter,
     PolygonFundamentalsAdapter,
     PolygonFundamentalsRESTClient,
@@ -44,6 +48,7 @@ SUPPORTED_DOMAINS = {
     "option_contract_reference",
     "option_contract_ohlcv",
     "option_open_interest",
+    "options_surface_v1",
 }
 
 
@@ -129,6 +134,8 @@ def _dispatch_domain(
         return _handle_fundamentals(args, config, normalized, router, run_id, config_path)
     if domain in {"option_contract_reference", "option_contract_ohlcv", "option_open_interest"}:
         return _handle_options(args, config, normalized, router, run_id, config_path)
+    if domain == "options_surface_v1":
+        return _handle_options_surface(args, config, normalized, router, run_id, config_path)
     raise ValueError(f"Unsupported ingestion domain '{domain}'")
 
 
@@ -324,11 +331,75 @@ def _handle_options(
     return _success_summary(normalized, run_id, mode, route.adapter_name, config_path, domain_manifest)
 
 
+def _handle_options_surface(
+    args: argparse.Namespace,
+    config: Mapping[str, Any],
+    normalized: NormalizedIngestionRequest,
+    router: IngestionRouter,
+    run_id: str,
+    config_path: Path,
+) -> Mapping[str, Any]:
+    request = _build_options_surface_request(normalized)
+    forced_mode = _forced_mode(args.mode) or _forced_mode(normalized.mode)
+    if forced_mode and forced_mode != "rest":
+        raise ValueError("options_surface_v1 only supports REST ingestion mode")
+    mode: Mode = "rest"
+    try:
+        route = router.resolve_vendor_adapter("options_surface_v1", normalized.vendor, mode)
+    except ValueError as exc:
+        return _failure_summary(normalized, run_id, mode, None, config_path, str(exc))
+
+    data_root = _resolve_data_root(args.data_root)
+    derived_base_cfg = config.get("derived_base_path")
+    derived_base = Path(derived_base_cfg).expanduser() if derived_base_cfg else data_root / "derived" / "options_surface_v1"
+    manifest_dir = _resolve_manifest_dir(config.get("manifest_dir"), derived_base / "manifests")
+    storage = OptionsSurfaceStorage(base_dir=derived_base, manifest_dir=manifest_dir)
+    manifest_path = storage.manifest_path(run_id)
+
+    if args.dry_run:
+        return _dry_run_summary(normalized, run_id, mode, route.adapter_name, config_path, manifest_path, args.force)
+
+    if not args.force and manifest_path.exists():
+        return _failure_summary(
+            normalized,
+            run_id,
+            mode,
+            route.adapter_name,
+            config_path,
+            f"Manifest {manifest_path} already exists. Re-run with --force to overwrite.",
+        )
+
+    ivol_client = _build_ivol_client(normalized.vendor_params)
+    adapter: IvolatilityOptionsSurfaceAdapter = route.adapter(  # type: ignore[assignment]
+        client=ivol_client,
+        vendor=normalized.vendor,
+        config=normalized.vendor_params or None,
+    )
+    rows, params = adapter.fetch_surface(request)
+    creation_ts = _deterministic_creation_timestamp(run_id)
+    manifest = storage.persist(
+        rows,
+        request=request,
+        run_id=run_id,
+        endpoint=adapter.endpoint,
+        params=params,
+        created_at=creation_ts,
+    )
+    return _success_summary(normalized, run_id, mode, route.adapter_name, config_path, manifest)
+
+
 def _resolve_run_id(run_id: str | None, domain: str) -> str:
     if run_id:
         return run_id
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     return f"{domain}-{timestamp}"
+
+
+def _deterministic_creation_timestamp(seed: str) -> str:
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    seconds = int(digest[:8], 16) % (365 * 24 * 60 * 60)
+    base = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    return (base + timedelta(seconds=seconds)).isoformat()
 
 
 def _forced_mode(value: str | None) -> Mode | None:
@@ -403,6 +474,21 @@ def _build_option_request(
         flat_file_uris=normalized.flat_file_uris,
         vendor=normalized.vendor,
         options=normalized.options,
+    )
+
+
+def _build_options_surface_request(normalized: NormalizedIngestionRequest) -> OptionsSurfaceIngestionRequest:
+    if not normalized.start_date or not normalized.end_date:
+        raise ValueError("options_surface_v1 configs must include start_date and end_date")
+    if not normalized.symbols:
+        raise ValueError("options_surface_v1 configs must include symbols")
+    return OptionsSurfaceIngestionRequest(
+        symbols=normalized.symbols,
+        start_date=normalized.start_date,
+        end_date=normalized.end_date,
+        vendor=normalized.vendor,
+        options=normalized.options,
+        vendor_params=normalized.vendor_params,
     )
 
 
