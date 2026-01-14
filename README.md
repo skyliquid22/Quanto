@@ -34,39 +34,51 @@ Core specs are embedded into this README so it can stand alone without external 
 ## Architecture
 Mermaid diagram of the full stack:
 
-```mermaid
-graph LR;
-    A-->B;
-    B-->C;
-    C-->D;
-    D-->E;
-    E-->F;
-    F-->G;
-    G-->H;
-    H-->I;
-    I-->J;
-    J-->K;
+Architecture diagram (ASCII):
 ```
-
-Legend: A=Configs, B=Ingestion Router, C=Raw Data, D=Canonical Reconciliation,
-E=Derived Features, F=Training and Evaluation, G=Qualification Gates,
-H=Promotion Record, I=Shadow Replay, J=Execution Phase 2, K=Monitoring and Logs.
+Configs
+  |
+Ingestion Router
+  |
+Raw Data
+  |
+Canonical Reconciliation
+  |
+Derived Features
+  |
+Training and Evaluation
+  |
+Qualification Gates
+  |
+Promotion Record
+  |
+Shadow Replay
+  |
+Execution Phase 2
+  |
+Monitoring and Logs
+```
 
 ## Data and Artifact Lifecycle
 
-```mermaid
-graph TB;
-    A-->B;
-    B-->C;
-    B-->D;
-    D-->E;
-    E-->F;
-    F-->G;
-    E-->H;
+Data and artifact lifecycle (ASCII):
 ```
-
-Legend: A=Raw Data, B=Canonical, C=Derived, D=Features, E=Experiments,
-F=Qualification Report, G=Promotion Record, H=Shadow Replay.
+Raw Data
+  |
+Canonical
+  |\
+  | \-> Derived
+  |
+Features
+  |
+Experiments
+  |\
+  | \-> Shadow Replay
+  |
+Qualification Report
+  |
+Promotion Record
+```
 
 Default data root is `.quanto_data/` (override with `QUANTO_DATA_ROOT`).
 
@@ -178,9 +190,9 @@ regime-sliced performance gates (drawdown and exposure protection in high-vol re
 Promotion records are immutable and deterministic for auditability.
 
 Mermaid diagram of the experiment lifecycle:
-```mermaid
-graph LR
-    A[Spec]-->B[Runner]-->C[Eval]-->D[Qualify]-->E[Promote]-->F[Shadow]
+Experiment lifecycle (ASCII):
+```
+Spec -> Runner -> Eval -> Qualify -> Promote -> Shadow
 ```
 
 ## Execution (Phase 2)
