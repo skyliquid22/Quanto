@@ -35,30 +35,30 @@ Core specs are embedded into this README so it can stand alone without external 
 Mermaid diagram of the full stack:
 
 ```mermaid
-graph LR;
-    A[Configs] --> B[IngestionRouter];
-    B --> C[RawData];
-    C --> D[Canonical];
-    D --> E[DerivedFeatures];
-    E --> F[TrainingEval];
-    F --> G[Qualification];
-    G --> H[Promotion];
-    H --> I[ShadowReplay];
-    I --> J[ExecutionPhase2];
-    J --> K[MonitoringLogs];
+graph LR
+    A[Configs]-->B[IngestionRouter]
+    B-->C[RawData]
+    C-->D[Canonical]
+    D-->E[DerivedFeatures]
+    E-->F[TrainingEval]
+    F-->G[Qualification]
+    G-->H[Promotion]
+    H-->I[ShadowReplay]
+    I-->J[Execution]
+    J-->K[Monitoring]
 ```
 
 ## Data and Artifact Lifecycle
 
 ```mermaid
-graph TB;
-    RAW[RawData] --> CAN[Canonical];
-    CAN --> DER[Derived];
-    CAN --> FEAT[Features];
-    FEAT --> EXP[Experiments];
-    EXP --> QUAL[Qualification];
-    QUAL --> PROMO[Promotion];
-    EXP --> SHADOW[ShadowReplay];
+graph TB
+    A[RawData]-->B[Canonical]
+    B-->C[Derived]
+    B-->D[Features]
+    D-->E[Experiments]
+    E-->F[Qualification]
+    F-->G[Promotion]
+    E-->H[ShadowReplay]
 ```
 
 Default data root is `.quanto_data/` (override with `QUANTO_DATA_ROOT`).
@@ -172,12 +172,8 @@ Promotion records are immutable and deterministic for auditability.
 
 Mermaid diagram of the experiment lifecycle:
 ```mermaid
-graph LR;
-    Spec[Spec] --> Runner[Runner];
-    Runner --> Eval[Eval];
-    Eval --> Qualify[Qualify];
-    Qualify --> Promote[Promote];
-    Promote --> Shadow[Shadow];
+graph LR
+    A[Spec]-->B[Runner]-->C[Eval]-->D[Qualify]-->E[Promote]-->F[Shadow]
 ```
 
 ## Execution (Phase 2)
