@@ -60,6 +60,7 @@ class EquityIngestionPipeline:
         mode = forced_mode or self.router.route_equity_ohlcv(request)
         source_files = self._source_file_metadata(request) if mode == "flat_file" else []
         records = self._collect_records(request, mode)
+        ingestion_stats = self._adapter_stats()
         resolved_timestamp = self._resolve_creation_timestamp(request, run_id)
         validation_config = {
             "manifest_base_path": self.manifest_dir / "validation",
@@ -86,6 +87,7 @@ class EquityIngestionPipeline:
                 files_written=[],
                 total_records=len(records),
                 validated_records=len(exc.validated_records),
+                ingestion_stats=ingestion_stats,
                 error=str(exc),
                 created_at=resolved_timestamp,
             )
@@ -106,6 +108,7 @@ class EquityIngestionPipeline:
             files_written=files_written,
             total_records=len(records),
             validated_records=len(sorted_records),
+            ingestion_stats=ingestion_stats,
             created_at=resolved_timestamp,
         )
         self._persist_manifest(manifest)
@@ -138,6 +141,12 @@ class EquityIngestionPipeline:
             if inspect.isawaitable(result):
                 await result
 
+    def _adapter_stats(self) -> Mapping[str, Any]:
+        stats = getattr(self.adapter, "ingestion_stats", None)
+        if isinstance(stats, Mapping):
+            return dict(stats)
+        return {}
+
     def _source_file_metadata(self, request: EquityIngestionRequest) -> List[Dict[str, Any]]:
         metadata: List[Dict[str, Any]] = []
         for uri in request.flat_file_uris:
@@ -157,6 +166,7 @@ class EquityIngestionPipeline:
         files_written: Sequence[Mapping[str, Any]],
         total_records: int,
         validated_records: int,
+        ingestion_stats: Mapping[str, Any] | None = None,
         error: str | None = None,
         created_at: str | None = None,
     ) -> Dict[str, Any]:
@@ -164,6 +174,15 @@ class EquityIngestionPipeline:
         if error:
             failures.append({"message": error})
 
+        raw_total = ingestion_stats.get("raw_records") if ingestion_stats else None
+        dropped = ingestion_stats.get("dropped_records") if ingestion_stats else None
+        requested_count = raw_total if raw_total is not None else total_records
+        record_counts = {
+            "requested": requested_count,
+            "validated": validated_records,
+        }
+        if dropped is not None:
+            record_counts["dropped"] = dropped
         manifest: Dict[str, Any] = {
             "run_id": run_id,
             "vendor": request.vendor,
@@ -172,16 +191,15 @@ class EquityIngestionPipeline:
             "symbols": sorted(request.symbols),
             "start_date": request.start_date.isoformat(),
             "end_date": request.end_date.isoformat(),
-            "record_counts": {
-                "requested": total_records,
-                "validated": validated_records,
-            },
+            "record_counts": record_counts,
             "source_files": list(source_files),
             "files_written": list(files_written),
             "validation_manifest": validation_manifest_path,
             "created_at": created_at,
             "failures": failures,
         }
+        if ingestion_stats:
+            manifest["ingestion_stats"] = dict(ingestion_stats)
         if error:
             manifest["error"] = error
         return manifest

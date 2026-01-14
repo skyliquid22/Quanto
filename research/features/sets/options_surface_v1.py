@@ -75,6 +75,31 @@ def build_options_surface_v1_features(
     return working.loc[:, ordered]
 
 
+def build_options_surface_v1_lag1_features(
+    equity_frame: "pd.DataFrame",
+    _options: object | None,
+    context: FeatureBuildContext,
+) -> "pd.DataFrame":
+    """Lagged join variant that aligns options surfaces to the prior session."""
+
+    _ensure_pandas_available()
+    if context is None:
+        raise ValueError("Feature build context is required for options_surface_v1_lag1")
+    timestamps = pd.to_datetime(equity_frame["timestamp"], utc=True)
+    lagged_dates = compute_previous_session_dates(timestamps)
+    surface_slice, file_hashes = _load_surface_slice(context)
+    context.inputs_used.update(file_hashes)
+    equity_for_join = equity_frame.copy()
+    equity_for_join["timestamp"] = timestamps
+    merged = attach_surface_columns(equity_for_join, surface_slice, surface_dates=lagged_dates)
+    working = merged.copy()
+    working.sort_values("timestamp", inplace=True, kind="mergesort")
+    working.reset_index(drop=True, inplace=True)
+    _apply_fill_policies(working)
+    ordered = ["timestamp", *OPTIONS_SURFACE_V1_COLUMNS]
+    return working.loc[:, ordered]
+
+
 def _load_surface_slice(
     context: FeatureBuildContext,
 ) -> Tuple[OptionsSurfaceSlice | None, Dict[str, str]]:
@@ -167,7 +192,28 @@ def _ensure_pandas_available() -> None:
         raise RuntimeError("pandas is required for options_surface_v1 feature builder") from _PANDAS_ERROR
 
 
+def compute_previous_session_dates(timestamps: "pd.Series") -> "pd.Series":
+    """Return Series of prior-session dates aligned to provided timestamps."""
+
+    normalized = pd.to_datetime(timestamps, utc=True).dt.normalize()
+    if normalized.empty:
+        return normalized.copy()
+    unique_sessions = normalized.drop_duplicates().sort_values(kind="mergesort")
+    if len(unique_sessions) <= 1:
+        empty = pd.Series(pd.NaT, index=normalized.index)
+        return pd.to_datetime(empty, utc=True)
+    previous_map: Dict[pd.Timestamp, pd.Timestamp] = {}
+    prev = unique_sessions.iloc[0]
+    for session in unique_sessions.iloc[1:]:
+        previous_map[session] = prev
+        prev = session
+    lagged = normalized.map(previous_map)
+    return pd.to_datetime(lagged, utc=True)
+
+
 __all__ = [
     "OPTIONS_SURFACE_V1_COLUMNS",
     "build_options_surface_v1_features",
+    "build_options_surface_v1_lag1_features",
+    "compute_previous_session_dates",
 ]

@@ -1,3 +1,0 @@
-label,fill_rate,reject_rate,partial_fill_rate,avg_slippage_bps,p95_slippage_bps,total_fees,turnover_realized,execution_halts,source
-Baseline (reward_v1),1.0,0.0,0.0,0.0,0.0,0.0,6.58329425445489,0,execution_qualification
-Candidate (reward_v2),1.0,0.0,0.0,0.0,0.0,0.0,5.674176230960971,0,execution_qualification

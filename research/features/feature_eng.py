@@ -20,6 +20,10 @@ from research.features.feature_registry import (
     strategy_to_feature_frame,
 )
 from research.features.sets.opts_surface_v1 import attach_surface_columns
+from research.features.sets.options_surface_v1 import (
+    OPTIONS_SURFACE_V1_COLUMNS,
+    compute_previous_session_dates,
+)
 from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossover
 
 
@@ -103,6 +107,7 @@ def build_universe_feature_results(
         "core_v1_xsec",
         "core_v1_xsec_regime",
         "core_v1_xsec_regime_opts_v1",
+        "core_v1_xsec_regime_opts_v1_lag1",
     }:
         raise ValueError(f"Unsupported universe feature set '{feature_set}'")
 
@@ -188,7 +193,7 @@ def build_universe_feature_results(
             )
         return results
 
-    if normalized == "core_v1_xsec_regime_opts_v1":
+    if normalized in {"core_v1_xsec_regime_opts_v1", "core_v1_xsec_regime_opts_v1_lag1"}:
         surface_slices, surface_hashes = load_options_surface(order, start_date, end_date, data_root=data_root)
         per_symbol_hashes: Dict[str, Dict[str, str]] = {symbol: {} for symbol in order}
         for rel_path, digest in surface_hashes.items():
@@ -225,14 +230,20 @@ def build_universe_feature_results(
             if len(merged) < 2:
                 raise ValueError(f"Not enough overlapping rows to build core_v1_xsec_regime_opts_v1 for {symbol}")
             surface_slice = surface_slices.get(symbol)
-            enriched = attach_surface_columns(merged, surface_slice)
-            enriched = enriched[["timestamp", *CORE_V1_XSEC_REGIME_OPTS_COLUMNS]]
+            surface_dates = None
+            if normalized == "core_v1_xsec_regime_opts_v1_lag1":
+                surface_dates = compute_previous_session_dates(merged["timestamp"])
+            enriched = attach_surface_columns(merged, surface_slice, surface_dates=surface_dates)
+            for column in OPTIONS_SURFACE_V1_COLUMNS:
+                if column not in enriched.columns:
+                    enriched[column] = float("nan")
+            enriched = enriched[["timestamp", *CORE_V1_XSEC_OBSERVATION_COLUMNS, *OPTIONS_SURFACE_V1_COLUMNS]]
             inputs_used = dict(feature_result.inputs_used)
             inputs_used.update(per_symbol_hashes.get(symbol, {}))
             results[symbol] = FeatureSetResult(
                 frame=enriched,
                 observation_columns=CORE_V1_XSEC_REGIME_OPTS_COLUMNS,
-                feature_set="core_v1_xsec_regime_opts_v1",
+                feature_set=normalized,
                 inputs_used=inputs_used,
             )
         return results

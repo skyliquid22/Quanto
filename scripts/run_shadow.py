@@ -21,6 +21,7 @@ from research.shadow.data_source import ReplayMarketDataSource
 from research.shadow.engine import ShadowEngine
 from research.shadow.logging import ShadowLogger
 from research.shadow.state_store import StateStore
+from research.eval.evaluate import EvaluationMetadata, evaluation_payload, from_rollout
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -143,6 +144,15 @@ def main(argv: list[str] | None = None) -> int:
         execution_mode=execution_mode,
     )
     summary = engine.run(max_steps=max_steps)
+    metrics_sim_path = _write_shadow_metrics_sim(
+        run_dir=run_dir,
+        spec=spec,
+        run_id=run_id,
+        start_date=start.isoformat(),
+        end_date=end.isoformat(),
+    )
+    if metrics_sim_path is not None:
+        _patch_shadow_summary(logger.summary_path, metrics_sim_path)
     print(  # noqa: T201 - CLI status
         f"Shadow execution finished. state={summary['state_path']} logs={summary['log_path']} summary={logger.summary_path}"
     )
@@ -158,6 +168,111 @@ def _derive_run_id(experiment_id: str, window: tuple[str, str]) -> str:
     }
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     return f"replay_{digest[:12]}"
+
+
+def _write_shadow_metrics_sim(
+    *,
+    run_dir: Path,
+    spec: object,
+    run_id: str,
+    start_date: str,
+    end_date: str,
+) -> Path | None:
+    steps_path = run_dir / "logs" / "steps.jsonl"
+    if not steps_path.exists():
+        print(f"Shadow metrics sim skipped: missing {steps_path}", file=sys.stderr)  # noqa: T201
+        return None
+    steps = _load_shadow_steps(steps_path)
+    if not steps:
+        print("Shadow metrics sim skipped: no steps recorded", file=sys.stderr)  # noqa: T201
+        return None
+    symbols = getattr(spec, "symbols", ())
+    timestamps, account_values, weights, costs, modes = _extract_shadow_series(steps, symbols)
+    if not timestamps or not account_values:
+        print("Shadow metrics sim skipped: missing timestamps/account values", file=sys.stderr)  # noqa: T201
+        return None
+    series = from_rollout(
+        timestamps=timestamps,
+        account_values=account_values,
+        weights=weights,
+        transaction_costs=costs,
+        symbols=list(symbols),
+        rollout_metadata={"source": "shadow_replay"},
+        modes=modes if any(mode for mode in modes) else None,
+    )
+    metadata = EvaluationMetadata(
+        symbols=tuple(symbols),
+        start_date=start_date,
+        end_date=end_date,
+        interval=str(getattr(spec, "interval", "daily")),
+        feature_set=getattr(spec, "feature_set", None),
+        policy_id=str(getattr(spec, "policy", "")),
+        run_id=run_id,
+        policy_details=dict(getattr(spec, "policy_params", {}) or {}),
+    )
+    payload = evaluation_payload(series, metadata, inputs_used={"shadow_steps_path": str(steps_path)})
+    out_path = run_dir / "metrics_sim.json"
+    out_path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+    return out_path
+
+
+def _load_shadow_steps(path: Path) -> list[dict[str, object]]:
+    steps: list[dict[str, object]] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            steps.append(payload)
+    steps.sort(key=lambda entry: int(entry.get("step", 0)))
+    return steps
+
+
+def _extract_shadow_series(
+    steps: list[dict[str, object]],
+    symbols: tuple[str, ...] | list[str],
+) -> tuple[list[str], list[float], list[dict[str, float]], list[float], list[str | None]]:
+    ordered_symbols = [str(symbol) for symbol in symbols]
+    timestamps: list[str] = []
+    account_values: list[float] = []
+    weights: list[dict[str, float]] = []
+    costs: list[float] = []
+    modes: list[str | None] = []
+    for record in steps:
+        as_of = record.get("as_of")
+        portfolio_value = record.get("portfolio_value")
+        if as_of is None or portfolio_value is None:
+            continue
+        timestamps.append(str(as_of))
+        account_values.append(float(portfolio_value))
+        record_symbols = record.get("symbols") or ordered_symbols
+        record_weights = record.get("weights") or []
+        weight_map = {symbol: 0.0 for symbol in ordered_symbols}
+        for idx, symbol in enumerate(record_symbols):
+            if idx >= len(record_weights):
+                break
+            if symbol in weight_map:
+                weight_map[symbol] = float(record_weights[idx])
+        weights.append(weight_map)
+        tx_cost = record.get("tx_cost")
+        costs.append(float(tx_cost) if tx_cost is not None else 0.0)
+        modes.append(record.get("mode") if record.get("mode") is not None else None)
+    return timestamps, account_values, weights, costs, modes
+
+
+def _patch_shadow_summary(summary_path: Path, metrics_sim_path: Path) -> None:
+    if not summary_path.exists():
+        return
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+    payload["metrics_sim_path"] = str(metrics_sim_path)
+    summary_path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":  # pragma: no cover

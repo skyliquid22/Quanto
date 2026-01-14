@@ -609,9 +609,12 @@ class IvolatilityClient:
 
     def _canonicalize_csv_bytes(self, text: str) -> bytes:
         reader = csv.DictReader(io.StringIO(text), delimiter=",")
-        rows: list[dict[str, Any]] = [dict(row) for row in reader]
+        rows: list[dict[str, Any]] = []
+        for row in reader:
+            cleaned = {key: value for key, value in row.items() if key is not None}
+            rows.append(cleaned)
         normalized = self._normalize_records(rows)
-        fieldnames = list(reader.fieldnames or [])
+        fieldnames = [name for name in (reader.fieldnames or []) if name]
         observed_keys: set[str] = set()
         for record in normalized:
             observed_keys.update(record.keys())
@@ -723,7 +726,10 @@ class IvolatilityClient:
         return None
 
     def _normalize_records(self, records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-        normalized = [dict(record) for record in records]
+        normalized: list[dict[str, Any]] = []
+        for record in records:
+            cleaned = {key: value for key, value in record.items() if key is not None}
+            normalized.append(cleaned)
         normalized.sort(key=self._sort_key)
         return normalized
 

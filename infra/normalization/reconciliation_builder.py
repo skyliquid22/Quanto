@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+import math
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,8 @@ except Exception:  # pragma: no cover - keep tests lightweight
 from .lineage import LineageInput, LineageOutput, build_lineage_payload, compute_file_hash
 
 UTC = timezone.utc
+MAX_OHLC_RATIO = 50.0
+MAX_DAILY_CLOSE_JUMP = 20.0
 _OPTION_DOMAIN_DIRS = {
     "option_contract_reference": "option_contract_reference",
     "option_contract_ohlcv": "option_contract_ohlcv",
@@ -442,6 +445,8 @@ class ReconciliationBuilder:
                     if top_vol and sec_vol:
                         volume_diffs.append(abs(top_vol - sec_vol) / top_vol * 100.0)
 
+        self._enforce_equity_price_sanity(selected_records)
+
         metrics = DomainMetrics(domain=domain, run_id=run_id)
         total = len(selected_records)
         metrics.total_records = total
@@ -480,6 +485,65 @@ class ReconciliationBuilder:
 
     def _write_equity_outputs(self, records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         return self._write_equity_outputs_yearly(records)
+
+    def _enforce_equity_price_sanity(self, records: Sequence[Mapping[str, Any]]) -> None:
+        if not records:
+            return
+        violations: Dict[str, List[str]] = defaultdict(list)
+        per_symbol: Dict[str, List[Mapping[str, Any]]] = defaultdict(list)
+        for record in records:
+            symbol = str(record.get("symbol") or "").upper()
+            if symbol:
+                per_symbol[symbol].append(record)
+
+        for record in records:
+            symbol = str(record.get("symbol") or "").upper()
+            timestamp = str(record.get("timestamp") or "")
+            open_value = _coerce_float(record.get("open"))
+            high_value = _coerce_float(record.get("high"))
+            low_value = _coerce_float(record.get("low"))
+            close_value = _coerce_float(record.get("close"))
+            if any(value is None or value <= 0 for value in (open_value, high_value, low_value, close_value)):
+                violations[symbol].append(timestamp)
+                continue
+            if high_value < max(open_value, close_value, low_value) or low_value > min(open_value, close_value):
+                violations[symbol].append(timestamp)
+                continue
+            if low_value > 0 and high_value / low_value > MAX_OHLC_RATIO:
+                violations[symbol].append(timestamp)
+                continue
+
+        for symbol, rows in per_symbol.items():
+            ordered = sorted(
+                rows,
+                key=lambda item: str(item.get("timestamp") or ""),
+            )
+            prev_close: float | None = None
+            for record in ordered:
+                timestamp = str(record.get("timestamp") or "")
+                close_value = _coerce_float(record.get("close"))
+                if close_value is None or close_value <= 0:
+                    prev_close = close_value
+                    continue
+                if prev_close is not None and prev_close > 0:
+                    ratio = close_value / prev_close if prev_close else None
+                    if ratio and (ratio > MAX_DAILY_CLOSE_JUMP or ratio < 1.0 / MAX_DAILY_CLOSE_JUMP):
+                        violations[symbol].append(timestamp)
+                prev_close = close_value
+
+        if violations:
+            sample = {
+                symbol: {
+                    "count": len(timestamps),
+                    "min_ts": min(timestamps),
+                    "max_ts": max(timestamps),
+                }
+                for symbol, timestamps in violations.items()
+            }
+            raise ValueError(
+                "Equity price sanity gate failed; "
+                f"{sum(len(ts) for ts in violations.values())} record(s) invalid: {sample}"
+            )
 
     def _write_equity_outputs_yearly(self, records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         grouped: MutableMapping[tuple[str, str], List[Mapping[str, Any]]] = defaultdict(list)
@@ -1142,6 +1206,18 @@ class ReconciliationBuilder:
             except ValueError as exc:  # pragma: no cover - defensive
                 raise ValueError(f"{field} must be YYYY-MM-DD text (got {value!r})") from exc
         raise ValueError(f"{field} must be a date compatible value (got {value!r})")
+
+
+def _coerce_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
 
 
 __all__ = ["ReconciliationBuilder", "ReconciliationError"]

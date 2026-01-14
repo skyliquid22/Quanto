@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, List, Mapping, Sequence
@@ -12,6 +16,7 @@ from ..ivolatility_client import IvolatilityClient
 from .polygon_equity import EquityIngestionRequest
 
 UTC = timezone.utc
+LOGGER = logging.getLogger(__name__)
 
 
 class IvolatilityEquityAdapter:
@@ -40,6 +45,7 @@ class IvolatilityEquityAdapter:
         self.bulk_endpoint = cfg.get("bulk_endpoint", self.BULK_ENDPOINT)
         self.per_symbol_endpoint = cfg.get("stock_prices_endpoint", self.STOCK_PRICES_ENDPOINT)
         self.flat_file_resolver = self._unsupported_flat_file_resolver
+        self.ingestion_stats: dict[str, Any] = {}
 
     def fetch_raw(
         self,
@@ -52,15 +58,28 @@ class IvolatilityEquityAdapter:
         return self._fetch_per_symbol_records(request, endpoint or self.per_symbol_endpoint)
 
     def normalize_records(self, raw_records: Iterable[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
+        records = list(raw_records)
         normalized: List[Mapping[str, Any]] = []
         seen_keys: set[tuple[str, datetime]] = set()
-        for raw in raw_records:
-            record = self._normalize_record(raw)
+        dropped = 0
+        for raw in records:
+            try:
+                record = self._normalize_record(raw)
+            except ValueError as exc:
+                dropped += 1
+                LOGGER.warning("Skipping invalid iVolatility equity record: %s", exc)
+                continue
             key = (record["symbol"], record["timestamp"])
             if key in seen_keys:
                 continue
             seen_keys.add(key)
             normalized.append(record)
+        self.ingestion_stats = {
+            "raw_records": len(records),
+            "dropped_records": dropped,
+        }
+        if dropped:
+            LOGGER.info("Dropped %d invalid iVolatility equity records", dropped)
         normalized.sort(key=lambda rec: (rec["symbol"], rec["timestamp"]))
         return normalized
 
@@ -115,7 +134,10 @@ class IvolatilityEquityAdapter:
                 "iVolatility bulk ingestion requires stock_group, stock_ids, or request symbols to be provided."
             )
 
-        records = self.client.fetch_async_dataset(endpoint, params)
+        payload = self.client.fetch_async_dataset(endpoint, params)
+        records = self._coerce_bulk_payload(payload)
+        if not records:
+            records = self._resolve_remote_payload(payload)
         symbol_filter = {symbol.upper() for symbol in request.symbols}
         filtered: List[Mapping[str, Any]] = []
         for entry in records:
@@ -169,31 +191,111 @@ class IvolatilityEquityAdapter:
             "open": self._extract_number(
                 record,
                 "open",
-                ("open", "open_price", "openPrice", "Open", "OPEN_PRICE"),
+                ("open", "open_price", "openPrice", "OpenPrice", "Open", "OPEN_PRICE"),
             ),
             "high": self._extract_number(
                 record,
                 "high",
-                ("high", "high_price", "highPrice", "High", "HIGH"),
+                ("high", "high_price", "highPrice", "HighPrice", "High", "HIGH"),
             ),
             "low": self._extract_number(
                 record,
                 "low",
-                ("low", "low_price", "lowPrice", "Low", "LOW"),
+                ("low", "low_price", "lowPrice", "LowPrice", "Low", "LOW"),
             ),
             "close": self._extract_number(
                 record,
                 "close",
-                ("close", "close_price", "closePrice", "Close", "CLOSE_PRICE"),
+                ("close", "close_price", "closePrice", "ClosePrice", "Close", "CLOSE_PRICE"),
             ),
             "volume": self._extract_number(
                 record,
                 "volume",
-                ("volume", "Volume", "totalVolume", "volumeDaily", "vol", "stockVolume", "STOCK_VOLUME"),
+                (
+                    "volume",
+                    "Volume",
+                    "totalVolume",
+                    "volumeDaily",
+                    "vol",
+                    "stockVolume",
+                    "STOCK_VOLUME",
+                    "StockVolume",
+                ),
             ),
             "source_vendor": self.vendor,
         }
         return normalized
+
+    def _coerce_bulk_payload(self, payload: Any) -> List[Mapping[str, Any]]:
+        if isinstance(payload, (bytes, bytearray)):
+            text = payload.decode("utf-8", errors="ignore")
+            return self._parse_csv_text(text)
+        if isinstance(payload, str):
+            stripped = payload.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError:
+                    return self._parse_csv_text(stripped)
+                return self._coerce_bulk_payload(parsed)
+            return self._parse_csv_text(stripped)
+        if isinstance(payload, Mapping):
+            data = payload.get("data")
+            if isinstance(data, Sequence):
+                rows = [self._normalize_record_keys(entry) for entry in data if isinstance(entry, Mapping)]
+                if rows and any(row.get("symbol") for row in rows):
+                    return rows
+            if payload.get("symbol"):
+                return [self._normalize_record_keys(payload)]
+        if isinstance(payload, Sequence):
+            normalized: List[Mapping[str, Any]] = []
+            for entry in payload:
+                if isinstance(entry, Mapping):
+                    normalized.append(self._normalize_record_keys(entry))
+            if normalized:
+                symbols_present = any(entry.get("symbol") for entry in normalized)
+                if symbols_present:
+                    return normalized
+        return []
+
+    def _parse_csv_text(self, text: str) -> List[Mapping[str, Any]]:
+        buffer = io.StringIO(text)
+        reader = csv.DictReader(buffer)
+        return [self._normalize_record_keys(row) for row in reader]
+
+    def _normalize_record_keys(self, record: Mapping[str, Any]) -> Mapping[str, Any]:
+        normalized: dict[str, Any] = {}
+        for key, value in record.items():
+            normalized_key = str(key).strip() if key is not None else ""
+            if not normalized_key:
+                continue
+            if isinstance(value, str):
+                normalized[normalized_key] = value.strip()
+            else:
+                normalized[normalized_key] = value
+        return normalized
+
+    def _resolve_remote_payload(self, payload: Any) -> List[Mapping[str, Any]]:
+        url: str | None = None
+        text: str | None = None
+        if isinstance(payload, (bytes, bytearray)):
+            text = payload.decode("utf-8", errors="ignore")
+        elif isinstance(payload, str):
+            text = payload
+        if text:
+            url = self.client._extract_download_url_from_text(text)
+        if not url and isinstance(payload, (Mapping, Sequence)):
+            url = self.client._extract_download_url(payload)
+        if not url:
+            return []
+        csv_bytes = self.client._download_and_normalize_file(url)
+        try:
+            csv_text = csv_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            return []
+        return self._parse_csv_text(csv_text)
 
     def _extract_symbol(self, record: Mapping[str, Any]) -> str:
         symbol = self._first_present(record, ("symbol", "ticker", "stockSymbol", "security")) or ""
@@ -205,17 +307,19 @@ class IvolatilityEquityAdapter:
     @staticmethod
     def _first_present(record: Mapping[str, Any], fields: Sequence[str]) -> Any | None:
         for field in fields:
-            if field in record and record[field] not in (None, ""):
-                return record[field]
+            for candidate in {field, field.lower(), field.upper()}:
+                if candidate in record and record[candidate] not in (None, ""):
+                    return record[candidate]
         return None
 
     def _extract_number(self, record: Mapping[str, Any], label: str, candidates: Sequence[str]) -> float:
         for field in candidates:
-            if field in record and record[field] not in (None, ""):
-                try:
-                    return float(record[field])
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(f"equity field '{field}' must be numeric") from exc
+            for candidate in {field, field.lower(), field.upper()}:
+                if candidate in record and record[candidate] not in (None, ""):
+                    try:
+                        return float(record[candidate])
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"equity field '{candidate}' must be numeric") from exc
         raise ValueError(f"equity record missing required field '{label}'")
 
     def _unsupported_flat_file_resolver(self, uri: str) -> Path:

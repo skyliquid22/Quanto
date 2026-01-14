@@ -14,3 +14,4 @@ data/processed/
 data/features/
 logs/
 .models/
+_cleanup_stash/

@@ -125,12 +125,15 @@ class OptionsSurfaceStorage:
     ) -> List[Mapping[str, Any]]:
         merged: dict[tuple[str, str], Mapping[str, Any]] = {}
         for payload in existing:
-            key = (str(payload.get("symbol", "")).upper(), str(payload.get("date", "")))
+            key = (str(payload.get("symbol") or "").upper(), str(payload.get("date") or ""))
             merged[key] = dict(payload)
         for payload in new_rows:
-            key = (str(payload.get("symbol", "")).upper(), str(payload.get("date", "")))
+            key = (str(payload.get("symbol") or "").upper(), str(payload.get("date") or ""))
             merged[key] = dict(payload)
-        ordered = sorted(merged.values(), key=lambda item: (item.get("symbol", ""), item.get("date", "")))
+        ordered = sorted(
+            merged.values(),
+            key=lambda item: (str(item.get("symbol") or ""), str(item.get("date") or "")),
+        )
         return [dict(entry) for entry in ordered]
 
     def _build_manifest(

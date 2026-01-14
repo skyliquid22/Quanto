@@ -27,6 +27,7 @@ from research.features.sets.opts_surface_v1 import OPTIONS_SURFACE_FEATURE_COLUM
 from research.features.sets.options_surface_v1 import (
     OPTIONS_SURFACE_V1_COLUMNS,
     build_options_surface_v1_features,
+    build_options_surface_v1_lag1_features,
 )
 from research.features.regime_features_v1 import REGIME_FEATURE_COLUMNS, compute_regime_features
 from research.regime import RegimeState
@@ -74,7 +75,7 @@ CORE_V1_XSEC_OBSERVATION_COLUMNS = _merge_observation_columns(
     tuple(column for column in EQUITY_XSEC_OBSERVATION_COLUMNS if column != "close"),
     warning_label="core_v1_xsec",
 )
-CORE_V1_XSEC_REGIME_OPTS_COLUMNS = CORE_V1_XSEC_OBSERVATION_COLUMNS + tuple(OPTIONS_SURFACE_FEATURE_COLUMNS)
+CORE_V1_XSEC_REGIME_OPTS_COLUMNS = CORE_V1_XSEC_OBSERVATION_COLUMNS + OPTIONS_SURFACE_V1_COLUMNS
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,7 @@ _UNIVERSE_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "core_v1_xsec": CORE_V1_XSEC_OBSERVATION_COLUMNS,
     "core_v1_xsec_regime": CORE_V1_XSEC_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
     "core_v1_xsec_regime_opts_v1": CORE_V1_XSEC_REGIME_OPTS_COLUMNS + REGIME_FEATURE_COLUMNS,
+    "core_v1_xsec_regime_opts_v1_lag1": CORE_V1_XSEC_REGIME_OPTS_COLUMNS + REGIME_FEATURE_COLUMNS,
 }
 _REGIME_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "regime_v1": REGIME_FEATURE_COLUMNS,
@@ -138,6 +140,7 @@ _FEATURE_SET_DEFAULT_REGIME: Dict[str, str] = {
     "core_v1_regime": "regime_v1",
     "core_v1_xsec_regime": "regime_v1",
     "core_v1_xsec_regime_opts_v1": "regime_v1",
+    "core_v1_xsec_regime_opts_v1_lag1": "regime_v1",
 }
 
 
@@ -435,8 +438,12 @@ def build_universe_feature_panel(
             aligned = pd.DataFrame(index=union_index, columns=base_columns or [])
         else:
             aligned = frame.reindex(union_index)
+        if aligned.dtypes.eq("object").any():
+            aligned = aligned.infer_objects(copy=False)
         if ffill_limit > 0:
-            aligned = aligned.ffill(limit=ffill_limit)
+            with pd.option_context("future.no_silent_downcasting", True):
+                aligned = aligned.ffill(limit=ffill_limit)
+            aligned = aligned.infer_objects(copy=False)
         normalized_frames[symbol] = aligned
     valid_mask = pd.Series(True, index=union_index)
     for aligned in normalized_frames.values():
@@ -519,7 +526,12 @@ _FEATURE_REGISTRY: Dict[str, _FeatureSetSpec] = {
         requires_options=False,
         builder=build_options_surface_v1_features,
     ),
-
+    "options_surface_v1_lag1": _FeatureSetSpec(
+        name="options_surface_v1_lag1",
+        observation_columns=OPTIONS_SURFACE_V1_COLUMNS,
+        requires_options=False,
+        builder=build_options_surface_v1_lag1_features,
+    ),
 }
 
 
@@ -536,6 +548,7 @@ __all__ = [
     "EQUITY_XSEC_OBSERVATION_COLUMNS",
     "CORE_V1_XSEC_OBSERVATION_COLUMNS",
     "CORE_V1_XSEC_REGIME_OPTS_COLUMNS",
+    "OPTIONS_SURFACE_V1_COLUMNS",
     "normalize_feature_set_name",
     "normalize_regime_feature_set_name",
     "is_universe_feature_set",

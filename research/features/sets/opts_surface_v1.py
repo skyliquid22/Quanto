@@ -24,6 +24,8 @@ _COVERAGE_SET = set(OPT_COVERAGE_COLUMNS)
 def attach_surface_columns(
     equity_frame: "pd.DataFrame",
     surface_slice: OptionsSurfaceSlice | None,
+    *,
+    surface_dates: "pd.Series | Sequence[object] | None" = None,
 ) -> "pd.DataFrame":
     """Left-join per-date surface metrics onto a single-symbol equity frame."""
 
@@ -32,7 +34,15 @@ def attach_surface_columns(
     if "timestamp" not in frame:
         raise ValueError("equity_frame must include timestamp columns to join surface data")
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
-    frame["_surface_date"] = frame["timestamp"].dt.normalize()
+
+    if surface_dates is None:
+        frame["_surface_date"] = frame["timestamp"].dt.normalize()
+    else:
+        override = pd.Series(surface_dates).reset_index(drop=True)
+        if len(override) != len(frame):
+            raise ValueError("surface_dates must align with equity_frame length")
+        override.index = frame.index
+        frame["_surface_date"] = pd.to_datetime(override, utc=True)
 
     if surface_slice is None or surface_slice.frame.empty:
         for column in OPTIONS_SURFACE_FEATURE_COLUMNS:

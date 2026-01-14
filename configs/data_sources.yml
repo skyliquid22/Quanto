@@ -4,6 +4,8 @@ raw_shard_yearly_daily: false
 vendors:
   - name: polygon
     domains: [equity_ohlcv]
+  - name: ivolatility
+    domains: [equity_ohlcv]
   - name: iex
     domains: [equity_ohlcv]
   - name: occ
@@ -19,7 +21,7 @@ reconciliation:
   allowed_validation_statuses: ["passed"]
   domains:
     equity_ohlcv:
-      vendor_priority: [polygon, iex]
+      vendor_priority: [polygon, ivolatility, iex]
       fallback_mode: per_symbol
     option_contract_reference:
       vendor_priority: [occ, opra]
