@@ -35,30 +35,30 @@ Core specs are embedded into this README so it can stand alone without external 
 Mermaid diagram of the full stack:
 
 ```mermaid
-flowchart LR
-    A["Configs: YAML + JSON"] --> B["Ingestion Router"]
-    B --> C["Raw Data (per vendor)"]
-    C --> D["Canonical Reconciliation"]
-    D --> E["Derived Features"]
-    E --> F["Training + Evaluation"]
-    F --> G["Qualification Gates"]
-    G --> H["Promotion Record"]
-    H --> I["Shadow Replay"]
-    I --> J["Execution Phase 2"]
-    J --> K["Monitoring + Logs"]
+graph LR
+    A[Configs] --> B[Ingestion Router]
+    B --> C[Raw Data]
+    C --> D[Canonical Reconciliation]
+    D --> E[Derived Features]
+    E --> F[Training and Evaluation]
+    F --> G[Qualification Gates]
+    G --> H[Promotion Record]
+    H --> I[Shadow Replay]
+    I --> J[Execution Phase2]
+    J --> K[Monitoring and Logs]
 ```
 
 ## Data and Artifact Lifecycle
 
 ```mermaid
-flowchart TB
-    RAW["raw/{vendor}/{domain}/..."] --> CAN["canonical/{domain}/..."]
-    CAN --> DER["derived/{domain}/..."]
-    CAN --> FEAT["features/{feature_set}/..."]
-    FEAT --> EXP["experiments/{experiment_id}/..."]
-    EXP --> QUAL["promotion/qualification_report.json"]
-    QUAL --> PROMO["promotions/{tier}/{experiment_id}.json"]
-    EXP --> SHADOW["shadow/{experiment_id}/replay_*/..."]
+graph TB
+    RAW[raw vendor domain] --> CAN[canonical domain]
+    CAN --> DER[derived domain]
+    CAN --> FEAT[features feature_set]
+    FEAT --> EXP[experiments experiment_id]
+    EXP --> QUAL[qualification report]
+    QUAL --> PROMO[promotion record]
+    EXP --> SHADOW[shadow replay]
 ```
 
 Default data root is `.quanto_data/` (override with `QUANTO_DATA_ROOT`).
@@ -179,11 +179,11 @@ sequenceDiagram
     participant Qualify
     participant Promote
     participant Shadow
-    Spec->>Runner: run_experiment(spec)
-    Runner->>Eval: metrics.json + regime_slices.json
-    Eval->>Qualify: qualification_report.json
-    Qualify->>Promote: promotions/{tier}/{id}.json
-    Promote->>Shadow: replay + metrics_sim.json
+    Spec->>Runner: run experiment
+    Runner->>Eval: metrics and regime slices
+    Eval->>Qualify: qualification report
+    Qualify->>Promote: promotion record
+    Promote->>Shadow: replay metrics
 ```
 
 ## Execution (Phase 2)
