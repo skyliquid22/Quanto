@@ -1,3 +1,0 @@
-1) Understand existing bootstrap/coverage logic and CLI entrypoints: inspect scripts and canonical loader/tests to mirror patterns (T9/T12 references). Determine new helper requirements. ✅
-2) Implement canonical coverage helper and build_missing helper; update CLI scripts to use them for universe bootstrap orchestration. ✅
-3) Extend and add integration tests verifying multi-symbol coverage + orchestrator behavior; adjust fixtures/mocks as needed. ☐

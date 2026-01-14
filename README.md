@@ -18,7 +18,6 @@ manifests at every stage.
 - Use Cases
 - Reproducibility and Governance
 - Testing
-- Docs and References
 
 ## Overview
 What this repo delivers:
@@ -30,37 +29,36 @@ What this repo delivers:
 - Shadow execution replay with metrics for governance evidence
 - Risk-first execution design (Phase 2), enforced by policy
 
-Authoritative specs live in `PRD.md`, `ARCHITECTURE.md`, `DATA_SPEC.md`,
-`FEATURE_SPEC.md`, `EXECUTION_SPEC.md`, and `RISK_POLICY.md`.
+Core specs are embedded into this README so it can stand alone without external files.
 
 ## Architecture
 Mermaid diagram of the full stack:
 
 ```mermaid
 flowchart LR
-    A[Configs (YAML/JSON)] --> B[Ingestion Router]
-    B --> C[Raw Data (per vendor)]
-    C --> D[Canonical Reconciliation]
-    D --> E[Derived / Features]
-    E --> F[Training + Evaluation]
-    F --> G[Qualification Gates]
-    G --> H[Promotion Record]
-    H --> I[Shadow Replay]
-    I --> J[Execution (Phase 2)]
-    J --> K[Monitoring + Logs]
+    A["Configs: YAML + JSON"] --> B["Ingestion Router"]
+    B --> C["Raw Data (per vendor)"]
+    C --> D["Canonical Reconciliation"]
+    D --> E["Derived Features"]
+    E --> F["Training + Evaluation"]
+    F --> G["Qualification Gates"]
+    G --> H["Promotion Record"]
+    H --> I["Shadow Replay"]
+    I --> J["Execution Phase 2"]
+    J --> K["Monitoring + Logs"]
 ```
 
 ## Data and Artifact Lifecycle
 
 ```mermaid
 flowchart TB
-    RAW[raw/{vendor}/{domain}/...] --> CAN[canonical/{domain}/...]
-    CAN --> DER[derived/{domain}/...]
-    CAN --> FEAT[features/{feature_set}/...]
-    FEAT --> EXP[experiments/{experiment_id}/...]
-    EXP --> QUAL[promotion/qualification_report.json]
-    QUAL --> PROMO[promotions/{tier}/{experiment_id}.json]
-    EXP --> SHADOW[shadow/{experiment_id}/replay_*/...]
+    RAW["raw/{vendor}/{domain}/..."] --> CAN["canonical/{domain}/..."]
+    CAN --> DER["derived/{domain}/..."]
+    CAN --> FEAT["features/{feature_set}/..."]
+    FEAT --> EXP["experiments/{experiment_id}/..."]
+    EXP --> QUAL["promotion/qualification_report.json"]
+    QUAL --> PROMO["promotions/{tier}/{experiment_id}.json"]
+    EXP --> SHADOW["shadow/{experiment_id}/replay_*/..."]
 ```
 
 Default data root is `.quanto_data/` (override with `QUANTO_DATA_ROOT`).
@@ -152,8 +150,7 @@ policy_params:
 ```
 
 ## Feature Sets
-Feature sets are registered in `research/features/feature_registry.py` and documented
-in `FEATURE_SPEC.md`. Examples:
+Feature sets are registered in `research/features/feature_registry.py`. Examples:
 - `core_v1` and `core_v1_regime`
 - `core_v1_xsec_regime`
 - `core_v1_xsec_regime_opts_v1`
@@ -193,7 +190,7 @@ sequenceDiagram
 Execution is bar-based and risk-first. Models output target weights; the execution
 layer translates targets into orders, runs risk checks, and routes to brokers.
 
-Key design constraints (see `EXECUTION_SPEC.md` and `RISK_POLICY.md`):
+Key design constraints (high level summary):
 - Pre-trade and post-fill risk enforcement
 - Max exposure, leverage, and drawdown limits
 - Deterministic, auditable order lifecycle
@@ -214,14 +211,3 @@ Key design constraints (see `EXECUTION_SPEC.md` and `RISK_POLICY.md`):
 ```
 pytest -q
 ```
-
-## Docs and References
-- `PRD.md` - product goals and scope
-- `ARCHITECTURE.md` - system architecture and layers
-- `DATA_SPEC.md` - schemas, storage layout, reconciliation rules
-- `FEATURE_SPEC.md` - feature definitions and rules
-- `EXECUTION_SPEC.md` - execution and order lifecycle
-- `RISK_POLICY.md` - hard risk limits
-- `AGENTS.md` - AI/human collaboration model
-
-For task history and design rationale, see `orchestration/out/tasks/`.

@@ -15,3 +15,11 @@ data/features/
 logs/
 .models/
 _cleanup_stash/
+/*.md
+!/README.md
+!/PRD.md
+/*.ipynb
+orchestration/
+scripts/run_pm_*
+scripts/run_engineer_task.py
+scripts/readme.txt
