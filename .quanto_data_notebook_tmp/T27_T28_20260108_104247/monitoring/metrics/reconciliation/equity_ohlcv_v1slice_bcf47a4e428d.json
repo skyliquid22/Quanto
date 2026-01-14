@@ -1,8 +1,0 @@
-{
-  "domain": "equity_ohlcv",
-  "fallback_count": 0,
-  "fallback_usage_rate": 0.0,
-  "percent_missing_primary": 0.0,
-  "run_id": "v1slice_bcf47a4e428d",
-  "total_records": 6
-}

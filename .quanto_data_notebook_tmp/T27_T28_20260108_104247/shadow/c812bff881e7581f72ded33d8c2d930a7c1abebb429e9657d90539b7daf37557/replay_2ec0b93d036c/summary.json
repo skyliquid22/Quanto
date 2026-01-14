@@ -1,8 +1,0 @@
-{
-  "completed": true,
-  "experiment_id": "c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557",
-  "log_path": ".quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/replay_2ec0b93d036c/logs/steps.jsonl",
-  "run_id": "replay_2ec0b93d036c",
-  "state_path": ".quanto_data/shadow/c812bff881e7581f72ded33d8c2d930a7c1abebb429e9657d90539b7daf37557/replay_2ec0b93d036c/state.json",
-  "steps_executed": 13
-}
