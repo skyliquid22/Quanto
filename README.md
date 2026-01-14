@@ -35,30 +35,30 @@ Core specs are embedded into this README so it can stand alone without external 
 Mermaid diagram of the full stack:
 
 ```mermaid
-graph LR
-    A[Configs] --> B[Ingestion Router]
-    B --> C[Raw Data]
-    C --> D[Canonical Reconciliation]
-    D --> E[Derived Features]
-    E --> F[Training and Evaluation]
-    F --> G[Qualification Gates]
-    G --> H[Promotion Record]
-    H --> I[Shadow Replay]
-    I --> J[Execution Phase2]
-    J --> K[Monitoring and Logs]
+graph LR;
+    A[Configs] --> B[IngestionRouter];
+    B --> C[RawData];
+    C --> D[Canonical];
+    D --> E[DerivedFeatures];
+    E --> F[TrainingEval];
+    F --> G[Qualification];
+    G --> H[Promotion];
+    H --> I[ShadowReplay];
+    I --> J[ExecutionPhase2];
+    J --> K[MonitoringLogs];
 ```
 
 ## Data and Artifact Lifecycle
 
 ```mermaid
-graph TB
-    RAW[raw vendor domain] --> CAN[canonical domain]
-    CAN --> DER[derived domain]
-    CAN --> FEAT[features feature_set]
-    FEAT --> EXP[experiments experiment_id]
-    EXP --> QUAL[qualification report]
-    QUAL --> PROMO[promotion record]
-    EXP --> SHADOW[shadow replay]
+graph TB;
+    RAW[RawData] --> CAN[Canonical];
+    CAN --> DER[Derived];
+    CAN --> FEAT[Features];
+    FEAT --> EXP[Experiments];
+    EXP --> QUAL[Qualification];
+    QUAL --> PROMO[Promotion];
+    EXP --> SHADOW[ShadowReplay];
 ```
 
 Default data root is `.quanto_data/` (override with `QUANTO_DATA_ROOT`).
@@ -172,18 +172,12 @@ Promotion records are immutable and deterministic for auditability.
 
 Mermaid diagram of the experiment lifecycle:
 ```mermaid
-sequenceDiagram
-    participant Spec
-    participant Runner
-    participant Eval
-    participant Qualify
-    participant Promote
-    participant Shadow
-    Spec->>Runner: run experiment
-    Runner->>Eval: metrics and regime slices
-    Eval->>Qualify: qualification report
-    Qualify->>Promote: promotion record
-    Promote->>Shadow: replay metrics
+graph LR;
+    Spec[Spec] --> Runner[Runner];
+    Runner --> Eval[Eval];
+    Eval --> Qualify[Qualify];
+    Qualify --> Promote[Promote];
+    Promote --> Shadow[Shadow];
 ```
 
 ## Execution (Phase 2)
