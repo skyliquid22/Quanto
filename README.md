@@ -35,31 +35,38 @@ Core specs are embedded into this README so it can stand alone without external 
 Mermaid diagram of the full stack:
 
 ```mermaid
-graph LR
-    A[Configs]-->B[IngestionRouter]
-    B-->C[RawData]
-    C-->D[Canonical]
-    D-->E[DerivedFeatures]
-    E-->F[TrainingEval]
-    F-->G[Qualification]
-    G-->H[Promotion]
-    H-->I[ShadowReplay]
-    I-->J[Execution]
-    J-->K[Monitoring]
+graph LR;
+    A-->B;
+    B-->C;
+    C-->D;
+    D-->E;
+    E-->F;
+    F-->G;
+    G-->H;
+    H-->I;
+    I-->J;
+    J-->K;
 ```
+
+Legend: A=Configs, B=Ingestion Router, C=Raw Data, D=Canonical Reconciliation,
+E=Derived Features, F=Training and Evaluation, G=Qualification Gates,
+H=Promotion Record, I=Shadow Replay, J=Execution Phase 2, K=Monitoring and Logs.
 
 ## Data and Artifact Lifecycle
 
 ```mermaid
-graph TB
-    A[RawData]-->B[Canonical]
-    B-->C[Derived]
-    B-->D[Features]
-    D-->E[Experiments]
-    E-->F[Qualification]
-    F-->G[Promotion]
-    E-->H[ShadowReplay]
+graph TB;
+    A-->B;
+    B-->C;
+    B-->D;
+    D-->E;
+    E-->F;
+    F-->G;
+    E-->H;
 ```
+
+Legend: A=Raw Data, B=Canonical, C=Derived, D=Features, E=Experiments,
+F=Qualification Report, G=Promotion Record, H=Shadow Replay.
 
 Default data root is `.quanto_data/` (override with `QUANTO_DATA_ROOT`).
 
