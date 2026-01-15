@@ -285,9 +285,13 @@ class IvolatilityEquityAdapter:
         elif isinstance(payload, str):
             text = payload
         if text:
-            url = self.client._extract_download_url_from_text(text)
+            extractor = getattr(self.client, "_extract_download_url_from_text", None)
+            if callable(extractor):
+                url = extractor(text)
         if not url and isinstance(payload, (Mapping, Sequence)):
-            url = self.client._extract_download_url(payload)
+            extractor = getattr(self.client, "_extract_download_url", None)
+            if callable(extractor):
+                url = extractor(payload)
         if not url:
             return []
         csv_bytes = self.client._download_and_normalize_file(url)
