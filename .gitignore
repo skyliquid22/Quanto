@@ -23,3 +23,5 @@ orchestration/
 scripts/run_pm_*
 scripts/run_engineer_task.py
 scripts/readme.txt
+.idea/
+.ipynb_checkpoints/
