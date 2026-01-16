@@ -1,222 +1,386 @@
-# Quanto Trading Platform
+# Quanto
+**Config-Driven Quantitative Research & Trading Platform**
 
-Institutional-grade, config-driven quant research and execution pipeline. Quanto
-spans data ingestion, canonicalization, feature engineering, RL training, evaluation,
-qualification, and (Phase 2) execution, with deterministic artifacts and auditable
-manifests at every stage.
+*A modular, reproducible platform for market data ingestion, feature engineering, machine learning / reinforcement learning research, systematic evaluation, and controlled execution.*
 
-## Contents
-- Overview
-- Architecture
-- Data and Artifact Lifecycle
-- Repository Map
-- Core Workflows
-- Configuration
-- Feature Sets
-- Evaluation, Qualification, Promotion
-- Execution (Phase 2)
-- Use Cases
-- Reproducibility and Governance
-- Testing
+---
 
-## Overview
-What this repo delivers:
-- Multi-vendor ingestion across REST/flat files with deterministic manifests
-- Canonical reconciliation with explicit vendor priority and lineage
-- Feature sets spanning OHLCV, cross-sectional signals, and options surfaces
-- RL training (PPO) and evaluation with repeatable artifacts
-- Promotion/qualification gates before any shadow or execution use
-- Shadow execution replay with metrics for governance evidence
-- Risk-first execution design (Phase 2), enforced by policy
+## Why Quanto Exists
 
-Core specs are embedded into this README so it can stand alone without external files.
+Quantitative research systems often break down when moving from experimentation to repeatable evaluation and production-grade workflows. Ad-hoc scripts, notebook-driven experiments, and inconsistent data handling make it difficult to trust results or compare strategies over time.
 
-## Architecture
-Mermaid diagram of the full stack:
+**Quanto** was built to address this gap by providing a **deterministic, end-to-end research and execution framework** that emphasizes:
+- reproducibility
+- explicit data lineage
+- experiment governance
+- clean separation between research and execution
 
-Architecture diagram (ASCII):
+The goal is not "black-box alpha," but **transparent, auditable ML-driven trading research**.
+
+---
+
+## Scope & Phases
+
+- **Phase 1 (current):** research, backtests, qualification gates, and shadow/paper execution only.
+- **Phase 2:** live execution via broker adapters (Alpaca), with strict risk controls.
+- **Non-goals:** no GUI/dashboard yet, no HFT/tick-level ingestion, no AutoML.
+
+---
+
+## Core Capabilities
+
+### Data Ingestion & Canonical Storage
+- Multi-vendor ingestion pipelines (equities, options, derived signals)
+- Deterministic manifests and canonical schemas
+- Versioned raw and processed datasets to support replay and audits
+
+### Feature Engineering & Labeling
+- Modular feature pipelines for tabular and time-series data
+- Consistent feature/label generation across experiments
+- Explicit control of lookahead, alignment, and leakage boundaries
+
+### ML & Reinforcement Learning Research
+- Reinforcement learning research environments (FinRL-based)
+- PPO policy training and reproducible evaluation
+- Config-driven experiment definitions for repeatable runs
+
+### Backtesting & Evaluation
+- Automated backtesting pipelines
+- Qualification gates and evaluation reports
+- Artifact generation for metrics, diagnostics, and comparisons
+
+### Execution & Risk Management
+- Research / execution boundary enforced by design
+- Shadow execution and deterministic replay
+- Risk controls and allocation logic isolated from research code
+
+### Monitoring & Visualization
+- Structured metrics output
+- Diagnostics and plotting utilities for experiment analysis
+- Designed to support long-running comparative research
+
+---
+
+## Feature Sets & Leakage Controls
+
+Feature sets are **versioned contracts**. For options, the default surface set is
+intentionally **dense and availability-aware** (OI, volume, IVX, IVR + coverage flags),
+and excludes sparse fields. When leakage is a concern, use **lagged variants**
+that align options surfaces to the prior trading session.
+
+---
+
+## System Architecture (High Level)
+
+```mermaid
+flowchart LR
+  subgraph Ingest
+    direction LR
+    Vendors[Data Vendors] --> Router[Ingestion Router]
+    Configs[Configs] --> Router
+    Router --> Rest[REST]
+    Router --> Flat[Flatfile]
+    Router --> Stream[Stream]
+    Rest --> Raw[Raw Data]
+    Flat --> Raw
+    Stream --> Raw
+    Raw --> Canonical[Canonical Store]
+  end
+  subgraph Features
+    direction LR
+    Canonical --> FeatureEng[Feature Engine]
+    FeatureEng --> Regime[Regime Features]
+    FeatureEng --> Options[Options Surface]
+  end
+  subgraph Training
+    direction LR
+    FeatureEng --> Env[RL Env]
+    Env --> PPO[PPO]
+    PPO --> Eval[Evaluation]
+  end
+  subgraph Governance
+    direction LR
+    Eval --> Qualify[Qualification]
+    Qualify --> Promote[Promotion]
+  end
+  subgraph Execution
+    direction LR
+    Promote --> Shadow[Shadow Replay]
+    Promote --> ExecCtrl[Exec Controller]
+    ExecCtrl --> Risk[Risk Engine]
+    Risk --> Orders[Order Router]
+    Orders --> Broker[Broker Adapter]
+    Broker --> Fills[Fills]
+    Fills --> Ledger[Ledger]
+  end
+  subgraph Monitoring
+    direction LR
+    Eval --> Metrics[Metrics]
+    Shadow --> Metrics
+    Ledger --> Metrics
+    Metrics --> Plots[Plots]
+    Metrics --> Alerts[Alerts]
+  end
 ```
-Configs
-  |
-Ingestion Router
-  |
-Raw Data
-  |
-Canonical Reconciliation
-  |
-Derived Features
-  |
-Training and Evaluation
-  |
-Qualification Gates
-  |
-Promotion Record
-  |
-Shadow Replay
-  |
-Execution Phase 2
-  |
-Monitoring and Logs
-```
+
+This architecture is designed to keep **research, governance, and execution** cleanly separated:
+- Ingestion and canonicalization build auditable, vendor‑agnostic datasets.
+- Features and training operate only on canonical data.
+- Qualification gates decide what is promotion‑eligible.
+- Execution uses promoted artifacts only, with explicit risk controls.
+- Monitoring closes the loop with metrics and diagnostics.
+
+---
 
 ## Data and Artifact Lifecycle
 
-Data and artifact lifecycle (ASCII):
+```mermaid
+flowchart TB
+  subgraph RawLayer
+    RawEq[Raw Equity OHLCV]
+    RawOpt[Raw Options Data]
+    RawFund[Raw Fundamentals]
+  end
+  subgraph CanonicalLayer
+    CanonEq[Canonical Equity]
+    CanonOpt[Canonical Options]
+    CanonFund[Canonical Fundamentals]
+  end
+  subgraph DerivedLayer
+    DerSurface[Derived Options Surface]
+  end
+  subgraph FeaturesLayer
+    FeatCore[Feature Sets Core V1]
+    FeatRegime[Regime Feature Set]
+  end
+  subgraph ExperimentsLayer
+    Spec[Experiment Spec]
+    Run[Run Experiment]
+    Metrics[Evaluation Metrics]
+    RegimeSlices[Regime Slices]
+  end
+  subgraph PromotionLayer
+    QualReport[Qualification Report]
+    PromoRecord[Promotion Record]
+  end
+  subgraph ShadowLayer
+    Replay[Shadow Replay]
+    MetricsSim[Metrics Sim]
+  end
+  subgraph ExecutionLayer
+    ExecRun[Paper Runs]
+    Orders[Orders]
+    FillLog[Fills]
+    ExecMetrics[Execution Metrics]
+  end
+
+  RawEq --> CanonEq
+  RawOpt --> CanonOpt
+  RawFund --> CanonFund
+  CanonEq --> DerSurface
+  CanonOpt --> DerSurface
+  CanonEq --> FeatCore
+  CanonOpt --> FeatCore
+  CanonEq --> FeatRegime
+  Spec --> Run
+  FeatCore --> Run
+  FeatRegime --> Run
+  Run --> Metrics
+  Run --> RegimeSlices
+  Metrics --> QualReport
+  RegimeSlices --> QualReport
+  QualReport --> PromoRecord
+  PromoRecord --> Replay
+  Replay --> MetricsSim
+  PromoRecord --> ExecRun
+  ExecRun --> Orders
+  Orders --> FillLog
+  FillLog --> ExecMetrics
 ```
-Raw Data
-  |
-Canonical
-  |\
-  | \-> Derived
-  |
-Features
-  |
-Experiments
-  |\
-  | \-> Shadow Replay
-  |
-Qualification Report
-  |
-Promotion Record
+
+This diagram is the end-to-end data story. Raw vendor data is normalized into
+canonical datasets, then transformed into feature sets and experiment artifacts.
+Qualification and promotion outputs are stored alongside shadow and execution
+metrics so every decision can be replayed and audited.
+
+Governance is **regime-aware**: high-volatility drawdown and exposure are enforced
+as **hard gates**, while global performance (e.g., Sharpe) is treated as **soft**
+evidence. Shadow replay produces deterministic execution evidence and should be
+treated as a promotion prerequisite, not a tuning loop.
+
+---
+
+## Experiment Lifecycle
+
+```mermaid
+sequenceDiagram
+  box Research
+  participant Spec
+  participant Runner
+  participant Eval
+  end
+  box Governance
+  participant Qualify
+  participant Promote
+  end
+  box Execution
+  participant Shadow
+  end
+  Spec->>Runner: run experiment
+  Runner->>Eval: metrics and regime slices
+  Eval->>Qualify: qualification report
+  Qualify->>Promote: promotion record
+  Promote->>Shadow: replay metrics
 ```
 
-Default data root is `.quanto_data/` (override with `QUANTO_DATA_ROOT`).
+This lifecycle highlights governance: evaluation feeds regression comparison and
+qualification, which gates promotion and any execution path. Shadow replay is
+evidence, not optimization.
 
-## Repository Map
-Key folders and what they contain:
-- `configs/`: ingestion configs, experiment specs, sweeps, and data source routing
-- `infra/`: ingestion clients, pipelines, validation, canonical reconciliation
-- `research/`: features, environments, evaluation, experiments, training, promotion
-- `execution/`: broker adapters and risk engine (Phase 2)
-- `scripts/`: CLI entry points for ingest, training, evaluation, promotion, shadow
-- `tests/`: unit/integration tests
-- `notebooks/`: analysis notebooks and diagnostics
+---
 
-## Core Workflows
-End-to-end workflow (typical v1 research run):
+## Quickstart (Research Workflow)
 
-1) Ingest raw data
+```bash
+git clone https://github.com/skyliquid22/Quanto
+cd Quanto
+pip install -r requirements.txt
 ```
+
+Environment prerequisites (set only what you use):
+```bash
+export POLYGON_API_KEY=...
+export IVOLATILITY_API_KEY=...
+```
+
+- **Ingest historical equity data (raw layer).**
+```bash
 python -m scripts.ingest \
   --config configs/ingest/polygon_equity_backfill.yml \
   --domain equity_ohlcv \
   --mode rest
 ```
+Output: raw Parquet + manifest under `.quanto_data/raw/polygon/equity_ohlcv/`.
 
-2) Build canonical datasets
-```
+- **Reconcile vendors into canonical datasets.**
+```bash
 python -m scripts.build_canonical_datasets \
   --start-date 2022-01-01 \
   --end-date 2025-12-31
 ```
+Output: canonical Parquet under `.quanto_data/canonical/equity_ohlcv/`.
 
-3) Run an experiment from a spec
-```
+- **Run a PPO experiment from a spec.**
+```bash
 python -m scripts.run_experiment \
-  --spec configs/experiments/core_v1_regime_ppo.yml
+  --spec configs/experiments/core_v1_regime_slices_ppo.json
 ```
+Output: experiment artifacts under `.quanto_data/experiments/<EXPERIMENT_ID>/`.
 
-4) Evaluate regime slices (if not already produced)
+- **Compute regime-sliced metrics for governance decisions.**
+```bash
+python -m scripts.run_regime_slices --experiment-id <EXPERIMENT_ID>
 ```
-python -m scripts.run_regime_slices \
-  --experiment-id <experiment_id>
-```
+Output: `evaluation/regime_slices.json` inside the experiment folder.
 
-5) Qualify and promote (governance gates)
-```
+- **Qualify and promote (gated by hard/soft criteria).**
+```bash
 python -m scripts.qualify_experiment \
-  --experiment-id <candidate_id> \
-  --baseline <baseline_id>
-
+  --experiment-id <EXPERIMENT_ID> \
+  --baseline <BASELINE_ID>
+```
+```bash
 python -m scripts.promote_experiment \
-  --experiment-id <candidate_id> \
+  --experiment-id <EXPERIMENT_ID> \
   --tier candidate \
-  --reason "regression + regime gates passed"
+  --reason "passes gates"
 ```
+Output: `promotion/qualification_report.json` and promotion records.
 
-6) Shadow replay (deterministic, no live trading in v1)
-```
+- **Shadow replay for deterministic execution evidence.**
+```bash
 python -m scripts.run_shadow \
-  --experiment-id <candidate_id> \
+  --experiment-id <EXPERIMENT_ID> \
   --replay \
   --start-date 2024-01-01 \
   --end-date 2024-12-31
 ```
+Output: replay artifacts under `.quanto_data/shadow/<EXPERIMENT_ID>/`.
 
-Notes:
-- API keys are read from env vars referenced in configs (example: `IVOLATILITY_API_KEY`).
-- Default data root is `.quanto_data/`, override with `QUANTO_DATA_ROOT`.
-
-## Configuration
-Configs are the single source of truth. Common config types:
-- Ingestion: `configs/ingest/*.yml`
-- Experiment specs: `configs/experiments/*.yml`
-- Sweeps: `configs/sweeps/*.yml`
-- Vendor priorities: `configs/data_sources.yml`
-
-Example experiment spec (trimmed):
-```yaml
-name: core_v1_regime_ppo
-symbols: [AAPL, MSFT, NVDA]
-start_date: "2023-01-01"
-end_date: "2025-12-31"
-feature_set: core_v1_regime
-regime_feature_set: regime_v1
-policy_params:
-  policy: "MlpPolicy"
-  timesteps: 200000
-  reward_version: "reward_v1"
+- **Data health report (coverage + NaN diagnostics).**
+```bash
+python -m scripts.report_data_health \
+  --domain equity_ohlcv \
+  --symbols AAPL MSFT NVDA \
+  --start-date 2022-01-01 \
+  --end-date 2025-12-31 \
+  --feature-set core_v1_regime
 ```
+Output: JSON reports under `.quanto_data/monitoring/data_health/<run_id>/`.
 
-## Feature Sets
-Feature sets are registered in `research/features/feature_registry.py`. Examples:
-- `core_v1` and `core_v1_regime`
-- `core_v1_xsec_regime`
-- `core_v1_xsec_regime_opts_v1`
-- `options_surface_v1` (same-day join)
-- `options_surface_v1_lag1` (1-session lag for leakage tests)
+All experiments are driven by **explicit configuration files**, not ad-hoc scripts.
 
-Feature set builders read canonical data only. All joins respect trading-session
-alignment and deterministic fill rules.
+Output locations (default under `.quanto_data/`):
+- `experiments/<EXPERIMENT_ID>/evaluation/metrics.json`
+- `experiments/<EXPERIMENT_ID>/evaluation/regime_slices.json`
+- `experiments/<EXPERIMENT_ID>/promotion/qualification_report.json`
+- `promotions/<tier>/<EXPERIMENT_ID>.json`
+- `shadow/<EXPERIMENT_ID>/<replay_id>/metrics_sim.json`
 
-## Evaluation, Qualification, Promotion
-Artifacts produced per experiment:
-- `evaluation/metrics.json`
-- `evaluation/regime_slices.json`
-- `promotion/qualification_report.json`
+---
 
-Qualification gates combine hard safety checks (NaN/Inf, constraint violations) with
-regime-sliced performance gates (drawdown and exposure protection in high-vol regimes).
-Promotion records are immutable and deterministic for auditability.
+## Data Health Checks
 
-Mermaid diagram of the experiment lifecycle:
-Experiment lifecycle (ASCII):
-```
-Spec -> Runner -> Eval -> Qualify -> Promote -> Shadow
-```
+Use the health reporter for deterministic coverage and NaN diagnostics:
+- **Calendar modes:** `union`, `intersection`, or `symbol` (data-derived, no external calendars).
+- **Strict mode:** fail fast when missing or NaN thresholds are exceeded.
+- **Outputs:** canonical and feature summaries under `.quanto_data/monitoring/data_health/<run_id>/`.
 
-## Execution (Phase 2)
-Execution is bar-based and risk-first. Models output target weights; the execution
-layer translates targets into orders, runs risk checks, and routes to brokers.
+---
 
-Key design constraints (high level summary):
-- Pre-trade and post-fill risk enforcement
-- Max exposure, leverage, and drawdown limits
-- Deterministic, auditable order lifecycle
+## Troubleshooting (Common Issues)
 
-## Use Cases
-- Quant Research: ingest data, compute features, run backtests, compare regimes
-- ML/RL Engineering: train PPO policies with configurable reward shaping
-- Execution/Risk: gate promotion, run shadow replay, verify risk controls
-- Data Engineering: validate ingestion quality, canonicalize multi-vendor feeds
+- **Missing canonical shards:** run `scripts.build_canonical_datasets` with the correct date range and verify raw inputs exist.
+- **NaN-heavy features:** check coverage flags and consider lagged variants for leakage checks.
+- **Qualification skips:** ensure baseline and candidate artifacts exist, then re-run `scripts.qualify_experiment`.
+- **Shadow replay gaps:** confirm the experiment was promoted and replay window has data coverage.
 
-## Reproducibility and Governance
-- Deterministic specs and manifests for every stage
-- Canonical reconciliation with explicit vendor priority
-- Promotion is gated, logged, and immutable
-- Shadow replay provides execution evidence before any live path
+---
 
-## Testing
-```
-pytest -q
-```
+## Design Principles
+
+- **Reproducibility First**  
+  Every experiment can be replayed using stored manifests and configs.
+
+- **Research ≠ Execution**  
+  Clear boundaries prevent research shortcuts from leaking into execution logic.
+
+- **Config-Driven Control**  
+  Pipelines are parameterized and versioned, enabling safe iteration.
+
+- **Auditability Over Convenience**  
+  Favor traceability and clarity over opaque automation.
+
+---
+
+## Testing & Quality
+
+- Unit and integration tests for core components
+- Explicit validation steps for data schemas and experiment outputs
+- Structured logging and artifact storage to support debugging and review
+
+---
+
+## Project Status
+
+Quanto is an **active research and engineering project** used to explore systematic ML-driven trading workflows. Some components are production-hardened, while others are research-oriented by design.
+
+The platform prioritizes **clarity, correctness, and extensibility** over short-term optimization.
+
+---
+
+## Who This Is For
+
+- ML engineers interested in **end-to-end applied systems**
+- Quantitative researchers who value **reproducibility and evaluation rigor**
+- Engineers exploring **ML/RL workflows beyond notebooks**
