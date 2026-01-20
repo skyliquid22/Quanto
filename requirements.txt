@@ -1,0 +1,12 @@
+fastparquet
+gymnasium
+httpx
+numpy
+openai
+pandas
+pyarrow
+pytest
+pyyaml
+stable-baselines3
+streamlit
+torch

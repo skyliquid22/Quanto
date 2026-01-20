@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,8 +14,8 @@ import pandas as pd
 
 try:
     import streamlit as st
-except ModuleNotFoundError as exc:  # pragma: no cover - runtime dependency
-    raise SystemExit("Streamlit is required. Install with: pip install streamlit") from exc
+except ModuleNotFoundError:  # pragma: no cover - optional for tests
+    st = None  # type: ignore[assignment]
 
 from infra.paths import get_data_root
 
@@ -58,7 +59,17 @@ class ExperimentSummary:
         }
 
 
-@st.cache_data(show_spinner=False)
+def _cache_disabled() -> bool:
+    return os.environ.get("QUANTO_DASHBOARD_DISABLE_CACHE") == "1"
+
+
+def _cache_data(func):
+    if st is None or _cache_disabled():
+        return func
+    return st.cache_data(show_spinner=False)(func)
+
+
+@_cache_data
 def read_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
@@ -147,7 +158,7 @@ def _extract_summary(exp_dir: Path) -> ExperimentSummary | None:
     )
 
 
-@st.cache_data(show_spinner=False)
+@_cache_data
 def load_experiment_summaries(registry_root: Path) -> list[ExperimentSummary]:
     summaries: list[ExperimentSummary] = []
     if not registry_root.exists():
@@ -239,6 +250,8 @@ def _format_symbols(spec_payload: Mapping[str, Any] | None) -> str:
 
 
 def main() -> None:
+    if st is None:  # pragma: no cover - runtime dependency
+        raise SystemExit("Streamlit is required. Install with: pip install streamlit")
     st.set_page_config(page_title="Quanto Experiment Dashboard", layout="wide")
     st.title("Quanto Experiment Dashboard")
 
