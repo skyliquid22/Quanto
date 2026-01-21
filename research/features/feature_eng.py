@@ -17,8 +17,10 @@ from research.features.feature_registry import (
     SMA_PLUS_XSEC_OBSERVATION_COLUMNS,
     build_features,
     normalize_feature_set_name,
+    normalize_regime_feature_set_name,
     strategy_to_feature_frame,
 )
+from research.regime.universe import PRIMARY_REGIME_UNIVERSE
 from research.features.sets.opts_surface_v1 import attach_surface_columns
 from research.features.sets.options_surface_v1 import (
     OPTIONS_SURFACE_V1_COLUMNS,
@@ -283,4 +285,16 @@ def build_universe_feature_results(
     return results
 
 
-__all__ = ["build_sma_feature_result", "build_universe_feature_results"]
+def resolve_regime_metadata(regime_feature_set: str | None) -> Dict[str, object] | None:
+    """Describe regime feature inputs for downstream metadata artifacts."""
+
+    if not regime_feature_set:
+        return None
+    normalized = normalize_regime_feature_set_name(regime_feature_set)
+    payload: Dict[str, object] = {"feature_set": normalized}
+    if normalized == "regime_v1_1":
+        payload["universe"] = list(PRIMARY_REGIME_UNIVERSE)
+    return payload
+
+
+__all__ = ["build_sma_feature_result", "build_universe_feature_results", "resolve_regime_metadata"]

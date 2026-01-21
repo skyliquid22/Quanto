@@ -20,6 +20,7 @@ except Exception as exc:  # pragma: no cover
 else:  # pragma: no cover
     _PANDAS_ERROR = None
 
+from research.datasets.canonical_equity_loader import load_primary_regime_universe
 from research.datasets.canonical_options_loader import CanonicalOptionData, load_canonical_options
 from research.features.equity_xsec_features_v1 import EQUITY_XSEC_OBSERVATION_COLUMNS
 from research.features.options_features_v1 import OPTION_FEATURE_COLUMNS, compute_options_features
@@ -29,7 +30,12 @@ from research.features.sets.options_surface_v1 import (
     build_options_surface_v1_features,
     build_options_surface_v1_lag1_features,
 )
-from research.features.regime_features_v1 import REGIME_FEATURE_COLUMNS, compute_regime_features
+from research.features.regime_features_v1 import (
+    REGIME_FEATURE_COLUMNS,
+    compute_primary_regime_features,
+    compute_regime_features,
+)
+from research.regime.universe import PRIMARY_REGIME_UNIVERSE
 from research.regime import RegimeState
 from research.strategies.sma_crossover import SMAStrategyResult
 from research.features.core_features_v1 import CORE_V1_OBSERVATION_COLUMNS, compute_core_features_v1
@@ -132,6 +138,10 @@ _UNIVERSE_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
 }
 _REGIME_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "regime_v1": REGIME_FEATURE_COLUMNS,
+    "regime_v1_1": REGIME_FEATURE_COLUMNS,
+}
+_REGIME_FEATURE_SET_ALIASES: Dict[str, str] = {
+    "regime_v1.1": "regime_v1_1",
 }
 
 _FEATURE_SET_DEFAULT_REGIME: Dict[str, str] = {
@@ -240,6 +250,7 @@ def normalize_feature_set_name(feature_set: str) -> str:
 
 def normalize_regime_feature_set_name(regime_feature_set: str) -> str:
     name = normalize_feature_set_name(regime_feature_set)
+    name = _REGIME_FEATURE_SET_ALIASES.get(name, name)
     if name not in _REGIME_FEATURE_OBSERVATION_COLUMNS:
         raise ValueError(f"Unknown regime feature set '{regime_feature_set}'")
     return name
@@ -249,6 +260,7 @@ def is_regime_feature_set(regime_feature_set: str | None) -> bool:
     if not regime_feature_set:
         return False
     normalized = normalize_feature_set_name(regime_feature_set)
+    normalized = _REGIME_FEATURE_SET_ALIASES.get(normalized, normalized)
     return normalized in _REGIME_FEATURE_OBSERVATION_COLUMNS
 
 
@@ -266,6 +278,7 @@ def is_universe_feature_set(feature_set: str) -> bool:
 
 def observation_columns_for_feature_set(feature_set: str) -> Tuple[str, ...]:
     normalized = normalize_feature_set_name(feature_set)
+    normalized = _REGIME_FEATURE_SET_ALIASES.get(normalized, normalized)
     if normalized in _FEATURE_REGISTRY:
         return _FEATURE_REGISTRY[normalized].observation_columns
     if normalized in _UNIVERSE_FEATURE_OBSERVATION_COLUMNS:
@@ -382,6 +395,34 @@ def _normalize_regime_feature_set(name: str | None) -> str | None:
     return normalize_regime_feature_set_name(name)
 
 
+def _build_primary_regime_close_panel(
+    timestamps: "pd.DatetimeIndex",
+    *,
+    data_root: Path | None,
+) -> "pd.DataFrame":
+    _ensure_pandas_available()
+    if timestamps.empty:
+        raise ValueError("No timestamps available to align primary regime universe")
+    start = timestamps[0].date()
+    end = timestamps[-1].date()
+    slices, _ = load_primary_regime_universe(start, end, data_root=data_root, interval="daily")
+    missing_symbols: List[str] = []
+    close_panel = pd.DataFrame(index=timestamps)
+    for symbol in PRIMARY_REGIME_UNIVERSE:
+        slice_data = slices.get(symbol)
+        if slice_data is None or slice_data.frame.empty:
+            missing_symbols.append(symbol)
+            continue
+        series = slice_data.frame["close"].astype(float).reindex(timestamps).ffill()
+        if series.isna().all():
+            missing_symbols.append(symbol)
+        close_panel[symbol] = series
+    if missing_symbols:
+        missing = sorted(set(missing_symbols))
+        raise ValueError(f"Primary regime universe missing canonical data for symbols: {missing}")
+    return close_panel
+
+
 def build_universe_feature_panel(
     feature_results: Mapping[str, FeatureSetResult],
     *,
@@ -390,6 +431,7 @@ def build_universe_feature_panel(
     forward_fill_limit: int = 3,
     fill_value: float = 0.0,
     regime_feature_set: str | None = None,
+    data_root: Path | None = None,
 ) -> UniverseFeaturePanel:
     """Align feature frames for multiple symbols on a shared calendar."""
 
@@ -403,7 +445,7 @@ def build_universe_feature_panel(
     if missing:
         raise ValueError(f"feature_results missing symbols: {missing}")
     normalized_regime = _normalize_regime_feature_set(regime_feature_set)
-    if normalized_regime and len(order) < 2:
+    if normalized_regime and normalized_regime != "regime_v1_1" and len(order) < 2:
         raise ValueError("Regime features require at least two symbols")
     base_columns: Tuple[str, ...] | None = None
     union_index: "pd.DatetimeIndex | None" = None
@@ -457,12 +499,16 @@ def build_universe_feature_panel(
     regime_states: Dict[pd.Timestamp, RegimeState] = {}
     if normalized_regime:
         regime_columns = _REGIME_FEATURE_OBSERVATION_COLUMNS[normalized_regime]
-        close_panel = pd.DataFrame(index=valid_index)
-        for symbol in order:
-            aligned = normalized_frames[symbol]
-            close_series = aligned.loc[valid_index, "close"].astype(float)
-            close_panel[symbol] = close_series
-        regime_frame = compute_regime_features(close_panel)
+        if normalized_regime == "regime_v1_1":
+            close_panel = _build_primary_regime_close_panel(valid_index, data_root=data_root)
+            regime_frame = compute_primary_regime_features(close_panel)
+        else:
+            close_panel = pd.DataFrame(index=valid_index)
+            for symbol in order:
+                aligned = normalized_frames[symbol]
+                close_series = aligned.loc[valid_index, "close"].astype(float)
+                close_panel[symbol] = close_series
+            regime_frame = compute_regime_features(close_panel)
         for timestamp in valid_index:
             values = [float(regime_frame.at[timestamp, column]) for column in regime_columns]
             regime_states[timestamp] = RegimeState(features=np.asarray(values, dtype="float64"), feature_names=regime_columns)

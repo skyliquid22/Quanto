@@ -14,6 +14,8 @@ except Exception as exc:  # pragma: no cover
 else:  # pragma: no cover
     _PANDAS_ERROR = None
 
+from research.regime.universe import PRIMARY_REGIME_UNIVERSE
+
 EPS = 1e-12
 REGIME_FEATURE_COLUMNS: tuple[str, ...] = (
     "market_vol_20d",
@@ -63,6 +65,27 @@ def compute_regime_features(
     return features
 
 
+def compute_primary_regime_features(
+    close_panel: "pd.DataFrame",
+    *,
+    window: int = 20,
+    universe: Sequence[str] = PRIMARY_REGIME_UNIVERSE,
+) -> "pd.DataFrame":
+    """Compute regime features using a fixed primary market universe."""
+
+    _ensure_pandas_available()
+    required = tuple(str(symbol).strip().upper() for symbol in universe if str(symbol).strip())
+    if not required:
+        raise ValueError("primary regime universe must include at least one symbol")
+    if close_panel.empty:
+        raise ValueError("close_panel cannot be empty")
+    missing = [symbol for symbol in required if symbol not in close_panel.columns]
+    if missing:
+        raise ValueError(f"close_panel missing primary regime symbols: {missing}")
+    panel = close_panel.loc[:, required]
+    return compute_regime_features(panel, window=window)
+
+
 def _rolling_corr_mean(returns: "pd.DataFrame", *, window: int) -> "pd.Series":
     if returns.shape[1] < 2:
         return pd.Series(0.0, index=returns.index)
@@ -90,4 +113,8 @@ def _ensure_pandas_available() -> None:
         raise RuntimeError("pandas is required for regime feature computation") from _PANDAS_ERROR
 
 
-__all__ = ["REGIME_FEATURE_COLUMNS", "compute_regime_features"]
+__all__ = [
+    "REGIME_FEATURE_COLUMNS",
+    "compute_regime_features",
+    "compute_primary_regime_features",
+]

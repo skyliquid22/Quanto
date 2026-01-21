@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from infra.normalization.lineage import compute_file_hash
 from infra.paths import get_data_root
+from research.regime.universe import PRIMARY_REGIME_UNIVERSE
 
 try:  # pragma: no cover - pandas optional in some environments
     import pandas as pd  # type: ignore
@@ -86,6 +87,30 @@ def load_canonical_equity(
             rel = _relative_to(path, resolved_root)
             file_hashes[rel] = compute_file_hash(path)
     return discovered, file_hashes
+
+
+def load_primary_regime_universe(
+    start_date: date | str,
+    end_date: date | str,
+    *,
+    data_root: Path | None = None,
+    interval: str = "daily",
+) -> Tuple[Dict[str, CanonicalEquitySlice], Dict[str, str]]:
+    """Load canonical OHLCV bars for the fixed primary regime universe."""
+
+    slices, hashes = load_canonical_equity(
+        PRIMARY_REGIME_UNIVERSE,
+        start_date,
+        end_date,
+        data_root=data_root,
+        interval=interval,
+    )
+    missing = [symbol for symbol in PRIMARY_REGIME_UNIVERSE if symbol not in slices]
+    empty = [symbol for symbol, slice_data in slices.items() if slice_data.frame.empty]
+    if missing or empty:
+        missing = missing + [symbol for symbol in empty if symbol not in missing]
+        raise ValueError(f"Primary regime universe missing canonical data for symbols: {missing}")
+    return slices, hashes
 
 
 def _ordered_dedup(symbols: Sequence[str]) -> List[str]:
@@ -312,4 +337,10 @@ def _ensure_pandas_available() -> None:
         raise RuntimeError("pandas is required to load canonical equity data") from _PANDAS_ERROR
 
 
-__all__ = ["CanonicalEquitySlice", "load_canonical_equity", "build_union_calendar", "align_ohlcv_panel"]
+__all__ = [
+    "CanonicalEquitySlice",
+    "load_canonical_equity",
+    "load_primary_regime_universe",
+    "build_union_calendar",
+    "align_ohlcv_panel",
+]
