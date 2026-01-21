@@ -6,6 +6,8 @@ import pandas as pd
 
 from research.envs.signal_weight_env import SignalWeightEnvConfig, SignalWeightTradingEnv
 from research.eval.metrics import MetricConfig, compute_metric_bundle
+from research.datasets.canonical_equity_loader import CanonicalEquitySlice
+from research.features import feature_registry
 from research.features.feature_registry import FeatureSetResult, SMA_OBSERVATION_COLUMNS, build_universe_feature_panel
 from research.features.regime_features_v1 import REGIME_FEATURE_COLUMNS
 from research.regime import RegimeState
@@ -31,6 +33,23 @@ def _feature_result(frame: pd.DataFrame) -> FeatureSetResult:
         feature_set="sma_universe_v1",
         inputs_used={},
     )
+
+
+def _make_primary_slice(symbol: str, closes: Sequence[float]) -> CanonicalEquitySlice:
+    timestamps = pd.date_range("2023-01-01", periods=len(closes), freq="D", tz="UTC")
+    frame = pd.DataFrame(
+        {
+            "symbol": symbol,
+            "open": closes,
+            "high": [value * 1.01 for value in closes],
+            "low": [value * 0.99 for value in closes],
+            "close": closes,
+            "volume": [1_000_000 for _ in closes],
+        },
+        index=timestamps,
+    )
+    frame.index.name = "timestamp"
+    return CanonicalEquitySlice(symbol=symbol, frame=frame, file_paths=[])
 
 
 def _run_constant_rollout(panel_rows: Sequence[Dict[str, object]], observation_columns: Sequence[str]):
@@ -140,3 +159,62 @@ def test_universe_rollout_with_regime_features():
     for key in diag_keys:
         assert key in regime_metrics.trading
         assert regime_metrics.trading[key]
+
+
+def test_universe_rollout_with_primary_regime_features(monkeypatch):
+    symbols = ("AAA", "BBB")
+    closes_a = [100.0, 101.0, 103.0, 102.0, 104.0]
+    closes_b = [50.0, 51.0, 50.5, 52.0, 53.0]
+    frame_a = _build_feature_frame(closes_a, "2023-01-01")
+    frame_b = _build_feature_frame(closes_b, "2023-01-01")
+
+    primary_slices = {
+        "SPY": _make_primary_slice("SPY", [300.0, 301.0, 299.0, 302.0, 303.0]),
+        "QQQ": _make_primary_slice("QQQ", [250.0, 251.0, 252.0, 253.0, 254.0]),
+        "IWM": _make_primary_slice("IWM", [180.0, 181.0, 182.0, 183.0, 184.0]),
+    }
+
+    def fake_load_primary(start_date, end_date, *, data_root=None, interval="daily"):
+        assert interval == "daily"
+        return dict(primary_slices), {}
+
+    monkeypatch.setattr(feature_registry, "load_primary_regime_universe", fake_load_primary)
+
+    feature_map = {
+        "AAA": _feature_result(frame_a),
+        "BBB": _feature_result(frame_b),
+    }
+
+    calendar = frame_a["timestamp"]
+    regime_panel = build_universe_feature_panel(
+        feature_map,
+        symbol_order=symbols,
+        calendar=calendar,
+        regime_feature_set="regime_v1_1",
+    )
+
+    assert regime_panel.observation_columns == SMA_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS
+    assert all("regime_state" in row for row in regime_panel.rows)
+    first_state = regime_panel.rows[0]["regime_state"]
+    assert isinstance(first_state, RegimeState)
+    assert first_state.feature_names == REGIME_FEATURE_COLUMNS
+    cfg = MetricConfig(risk_config=SignalWeightEnvConfig().risk_config)
+    (
+        account_values,
+        weights,
+        costs,
+        regime_names,
+        regime_series,
+        _,
+    ) = _run_constant_rollout(regime_panel.rows, regime_panel.observation_columns)
+
+    metrics = compute_metric_bundle(
+        account_values,
+        weights,
+        transaction_costs=costs,
+        symbols=symbols,
+        config=cfg,
+        regime_feature_series=regime_series,
+        regime_feature_names=regime_names,
+    )
+    assert metrics.trading["regime_feature_summary"]
