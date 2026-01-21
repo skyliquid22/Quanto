@@ -1,0 +1,23 @@
+# iVolatility options surface backfill for primary regime universe
+vendor: ivolatility
+mode: rest
+
+symbols:
+  - SPY
+  - QQQ
+  - IWM
+
+start_date: "2011-01-01"
+end_date: "2025-12-31"
+
+ivolatility:
+  timeout: 120
+  max_retries: 6
+  backoff_factor: 2.5
+  cache_dir: ".quanto_data/cache/options_surface_primary_regime"
+  vol_unit: percent
+  params:
+    format: json
+
+options:
+  notes: "Primary regime options_surface_v1 backfill (SPY/QQQ/IWM, 2011-2025)"

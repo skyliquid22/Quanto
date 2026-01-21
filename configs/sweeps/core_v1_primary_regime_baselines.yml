@@ -1,0 +1,41 @@
+sweep_name: core_v1_primary_regime_baselines
+base_experiment_spec:
+  experiment_name: core_v1_primary_regime_baselines
+  symbols: ["SPY", "QQQ", "IWM"]
+  start_date: "2012-01-01"
+  end_date: "2025-12-31"
+  interval: "daily"
+  feature_set: "core_v1"
+  regime_feature_set: null
+  policy: "ppo"
+  policy_params:
+    fast_window: 20
+    slow_window: 50
+    policy_mode: "sigmoid"
+    sigmoid_scale: 3.0
+    timesteps: 200000
+    n_steps: 2048
+    batch_size: 256
+    learning_rate: 0.0003
+    gamma: 0.99
+  evaluation_split:
+    train_ratio: 0.8
+    test_ratio: 0.2
+    test_window_months: null
+  cost_config:
+    transaction_cost_bp: 1.0
+  risk_config:
+    long_only: true
+    max_weight: 0.6
+    exposure_cap: 1.0
+    min_cash: 0.0
+    max_turnover_1d: 0.4
+  seed: 42
+  notes: "Baseline sweep for SMA vs PPO on primary regime universe."
+sweep_dimensions:
+  policy:
+    - "sma"
+    - "ppo"
+  regime_feature_set:
+    - null
+    - "regime_v1_1"

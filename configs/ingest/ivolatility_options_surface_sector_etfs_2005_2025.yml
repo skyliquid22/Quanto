@@ -1,0 +1,22 @@
+# iVolatility options surface backfill for sector ETFs (daily snapshots)
+vendor: ivolatility
+mode: rest
+
+domain_defaults:
+  options_surface_v1:
+    interval: daily
+
+symbols:
+  - XLB
+  - XLC
+  - XLE
+  - XLF
+  - XLI
+  - XLK
+  - XLP
+  - XLU
+  - XLV
+  - XLY
+
+start_date: "2005-01-01"
+end_date: "2025-12-31"

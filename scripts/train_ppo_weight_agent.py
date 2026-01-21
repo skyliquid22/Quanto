@@ -33,6 +33,7 @@ from research.features.feature_registry import (
     build_features,
     is_universe_feature_set,
     normalize_feature_set_name,
+    normalize_regime_feature_set_name,
     strategy_to_feature_frame,
 )
 from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossover
@@ -86,6 +87,10 @@ def parse_args() -> argparse.Namespace:
         ],
         default="sma_v1",
         help="Feature set used for environment observations.",
+    )
+    parser.add_argument(
+        "--regime-feature-set",
+        help="Optional regime feature set to append to universe observations.",
     )
     parser.add_argument("--transaction-cost-bp", type=float, default=1.0, help="Transaction cost in basis points.")
     parser.add_argument("--max-weight", type=float, default=1.0, help="Per-asset weight cap enforced by projection.")
@@ -417,7 +422,13 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
     feature_set_name: str | None = None
     multi_symbol = len(symbols) > 1
     normalized_feature_set = normalize_feature_set_name(args.feature_set)
-    panel_regime_feature = default_regime_for_feature_set(normalized_feature_set)
+    if args.regime_feature_set:
+        try:
+            panel_regime_feature = normalize_regime_feature_set_name(args.regime_feature_set)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+    else:
+        panel_regime_feature = default_regime_for_feature_set(normalized_feature_set)
     if not multi_symbol and is_universe_feature_set(normalized_feature_set):
         raise SystemExit(f"Feature set '{args.feature_set}' requires at least two symbols (--symbols).")
     if multi_symbol and is_universe_feature_set(normalized_feature_set):
@@ -555,6 +566,7 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         feature_set=feature_set_name or args.feature_set,
         base_observation_columns=base_observation_columns,
         observation_headers=observation_headers,
+        regime_feature_set=panel_regime_feature,
         data_split=data_split,
     )
     eval_payload = build_eval_report(
@@ -575,6 +587,7 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         feature_set=feature_set_name or args.feature_set,
         base_observation_columns=base_observation_columns,
         observation_headers=observation_headers,
+        regime_feature_set=panel_regime_feature,
         data_split=data_split,
     )
 
@@ -648,6 +661,7 @@ def build_train_report(
     feature_set: str,
     base_observation_columns: Sequence[str],
     observation_headers: Sequence[str],
+    regime_feature_set: str | None = None,
     data_split: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     symbol_list = list(symbols)
@@ -685,6 +699,7 @@ def build_train_report(
             "fast_window": sma_config.fast_window,
             "slow_window": sma_config.slow_window,
             "feature_set": feature_set,
+            "regime_feature_set": regime_feature_set or "",
             "observation_columns": list(base_observation_columns),
             "panel_observation_columns": list(observation_headers),
         },
@@ -718,6 +733,7 @@ def build_eval_report(
     feature_set: str,
     base_observation_columns: Sequence[str],
     observation_headers: Sequence[str],
+    regime_feature_set: str | None = None,
     data_split: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     symbol_list = list(symbols)
@@ -761,6 +777,7 @@ def build_eval_report(
             "fast_window": sma_config.fast_window,
             "slow_window": sma_config.slow_window,
             "feature_set": feature_set,
+            "regime_feature_set": regime_feature_set or "",
             "observation_columns": list(base_observation_columns),
             "panel_observation_columns": list(observation_headers),
         },

@@ -22,6 +22,7 @@ UTC = timezone.utc
 def _make_args(tmp_path, **overrides):
     defaults = {
         "symbol": "AAPL",
+        "symbols": None,
         "start_date": "2023-01-02",
         "end_date": "2023-01-05",
         "interval": "daily",
@@ -36,6 +37,7 @@ def _make_args(tmp_path, **overrides):
         "run_id": None,
         "data_root": str(tmp_path),
         "feature_set": "sma_v1",
+        "regime_feature_set": None,
         "vendor": "polygon",
         "live": False,
         "ingest_mode": "rest",
@@ -214,3 +216,53 @@ def test_missing_sb3_dependency_surfaces(tmp_path, monkeypatch: pytest.MonkeyPat
     with pytest.raises(SystemExit) as excinfo:
         trainer.run_training(args)
     assert "stable_baselines3 is required" in str(excinfo.value)
+
+
+def test_regime_feature_set_forwarded_to_panel(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    args = _make_args(
+        tmp_path,
+        symbols=["AAPL", "MSFT"],
+        feature_set="sma_v1",
+        regime_feature_set="regime_v1_1",
+    )
+    manifest = _create_manifest(tmp_path, args)
+    _patch_common_dependencies(monkeypatch, tmp_path, manifest=manifest)
+
+    monkeypatch.setattr(
+        trainer,
+        "build_union_calendar",
+        lambda *args, **kwargs: [
+            datetime(2023, 1, 2, tzinfo=UTC),
+            datetime(2023, 1, 3, tzinfo=UTC),
+        ],
+    )
+
+    captured: Dict[str, Any] = {}
+
+    def fake_panel(*args, **kwargs):
+        symbol_order = kwargs.get("symbol_order")
+        regime_feature_set = kwargs.get("regime_feature_set")
+        captured["regime_feature_set"] = regime_feature_set
+        rows = []
+        for stamp in [datetime(2023, 1, 2, tzinfo=UTC), datetime(2023, 1, 3, tzinfo=UTC)]:
+            panel = {
+                symbol: {
+                    "close": 10.0,
+                    "sma_fast": 9.5,
+                    "sma_slow": 8.0,
+                    "sma_diff": 1.5,
+                    "sma_signal": 1.0,
+                }
+                for symbol in symbol_order
+            }
+            rows.append({"timestamp": stamp, "panel": panel})
+        return SimpleNamespace(
+            rows=rows,
+            observation_columns=("close", "sma_fast", "sma_slow", "sma_diff", "sma_signal"),
+        )
+
+    monkeypatch.setattr(trainer, "build_universe_feature_panel", fake_panel)
+
+    trainer.run_training(args)
+
+    assert captured["regime_feature_set"] == "regime_v1_1"
