@@ -25,3 +25,5 @@ scripts/run_engineer_task.py
 scripts/readme.txt
 .idea/
 .ipynb_checkpoints/
+.DS_Store
+tmp/
