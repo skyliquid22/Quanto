@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from datetime import date
 from hashlib import sha256
@@ -65,7 +66,18 @@ def load_canonical_equity_pandas(
                 )
             files.append(path)
             hashes[_relative_to(path, resolved_root)] = compute_file_hash(path)
-            frame = pd.read_parquet(path, engine=parquet_engine)
+            try:
+                frame = pd.read_parquet(path, engine=parquet_engine)
+            except Exception as exc:
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    raise exc
+                if isinstance(raw, dict) and "data" in raw:
+                    raw = raw["data"]
+                if not isinstance(raw, list):
+                    raise exc
+                frame = pd.DataFrame(raw)
             if "timestamp" not in frame.columns:
                 if frame.index.name == "timestamp":
                     frame = frame.reset_index()
@@ -261,14 +273,71 @@ def run_data_health_preflight(
 ) -> Dict[str, Any]:
     """Run a lightweight data health check before training/evaluation."""
 
-    load_result = load_canonical_equity_pandas(
-        symbols,
-        start_date,
-        end_date,
-        data_root=data_root,
-        interval=interval,
-        parquet_engine=parquet_engine,
-    )
+    try:
+        load_result = load_canonical_equity_pandas(
+            symbols,
+            start_date,
+            end_date,
+            data_root=data_root,
+            interval=interval,
+            parquet_engine=parquet_engine,
+        )
+    except OSError as exc:
+        if str(parquet_engine).strip().lower() != "auto":
+            try:
+                load_result = load_canonical_equity_pandas(
+                    symbols,
+                    start_date,
+                    end_date,
+                    data_root=data_root,
+                    interval=interval,
+                    parquet_engine="auto",
+                )
+            except FileNotFoundError as missing_exc:
+                exc = missing_exc
+            except OSError:
+                raise
+            else:
+                exc = None
+        if exc is None:
+            pass
+        else:
+            if isinstance(exc, FileNotFoundError):
+                payload = {
+                    "canonical": {"error": str(exc)},
+                    "features": None,
+                    "failures": ["missing_data"],
+                    "settings": {
+                        "calendar_mode": calendar_mode,
+                        "max_missing_ratio": max_missing_ratio,
+                        "max_nan_ratio": max_nan_ratio,
+                        "strict": strict,
+                    },
+                }
+                message = f"Data health preflight skipped: {exc}"
+                if strict:
+                    raise RuntimeError(message) from exc
+                print(message, file=sys.stderr)  # noqa: T201 - CLI warning
+                return payload
+            raise
+    except FileNotFoundError as exc:
+        payload = {
+            "canonical": {"error": str(exc)},
+            "features": None,
+            "failures": ["missing_data"],
+            "settings": {
+                "calendar_mode": calendar_mode,
+                "max_missing_ratio": max_missing_ratio,
+                "max_nan_ratio": max_nan_ratio,
+                "strict": strict,
+            },
+        }
+        message = f"Data health preflight skipped: {exc}"
+        if strict:
+            raise RuntimeError(message) from exc
+        print(message, file=sys.stderr)  # noqa: T201 - CLI warning
+        return payload
+
     canonical_report = compute_canonical_health(
         load_result.slices,
         start_date=start_date,
@@ -282,14 +351,21 @@ def run_data_health_preflight(
         if is_universe_feature_set(feature_set_name):
             feature_report = None
         else:
-            frames, observation_columns = build_feature_frames(
-                feature_set=feature_set_name,
-                slices=load_result.slices,
-                start_date=start_date,
-                end_date=end_date,
-                data_root=data_root,
-            )
-            feature_report = compute_feature_health(frames, observation_columns)
+            try:
+                frames, observation_columns = build_feature_frames(
+                    feature_set=feature_set_name,
+                    slices=load_result.slices,
+                    start_date=start_date,
+                    end_date=end_date,
+                    data_root=data_root,
+                )
+                feature_report = compute_feature_health(frames, observation_columns)
+            except Exception as exc:
+                message = f"Data health preflight skipped feature checks: {exc}"
+                if strict:
+                    raise RuntimeError(message) from exc
+                print(message, file=sys.stderr)  # noqa: T201 - CLI warning
+                feature_report = None
 
     failures = evaluate_thresholds(
         canonical_report=canonical_report,
@@ -312,7 +388,7 @@ def run_data_health_preflight(
         message = f"Data health preflight failed: {', '.join(failures)}"
         if strict:
             raise RuntimeError(message)
-        print(message)  # noqa: T201 - CLI warning
+        print(message, file=sys.stderr)  # noqa: T201 - CLI warning
     return payload
 
 
