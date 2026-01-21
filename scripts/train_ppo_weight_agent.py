@@ -39,6 +39,7 @@ from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossov
 from research.training.ppo_trainer import DEFAULT_REWARD_VERSION, EvaluationResult, evaluate, train_ppo
 from research.risk import RiskConfig
 from research.training.reward_registry import get_reward_spec, reward_versions
+from research.validation.data_health import run_data_health_preflight
 from scripts.run_sma_finrl_rollout import (  # type: ignore
     BootstrapMetadata,
     _canonical_files_exist as _rollout_canonical_files_exist,
@@ -340,6 +341,23 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         run_id_seed=args.run_id,
     )
 
+    try:
+        run_data_health_preflight(
+            symbols=symbols,
+            start_date=start,
+            end_date=end,
+            feature_set=args.feature_set,
+            data_root=data_root,
+            interval=interval,
+            calendar_mode=os.environ.get("QUANTO_DATA_HEALTH_CALENDAR_MODE", "union"),
+            parquet_engine=os.environ.get("QUANTO_DATA_HEALTH_PARQUET_ENGINE", "fastparquet"),
+            max_missing_ratio=_env_float("QUANTO_DATA_HEALTH_MAX_MISSING_RATIO", 0.01),
+            max_nan_ratio=_env_float("QUANTO_DATA_HEALTH_MAX_NAN_RATIO", 0.05),
+            strict=_env_flag("QUANTO_DATA_HEALTH_STRICT"),
+        )
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+
     split_requested = any(
         [
             getattr(args, "train_start_date", None),
@@ -445,6 +463,7 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
             calendar=calendar,
             forward_fill_limit=3,
             regime_feature_set=panel_regime_feature,
+            data_root=data_root,
         )
         rows = panel.rows
         base_observation_columns = panel.observation_columns
@@ -869,6 +888,21 @@ def _build_data_split_payload(
         "test_ratio": float(args.test_ratio) if args.test_ratio is not None else None,
         "test_window_months": int(args.test_window_months) if args.test_window_months is not None else None,
     }
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float | None) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
 
 
 __all__ = ["parse_args", "run_training", "main"]

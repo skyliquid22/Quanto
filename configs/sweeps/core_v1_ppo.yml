@@ -20,6 +20,10 @@ base_experiment_spec:
     batch_size: 256
     learning_rate: 0.0003
     gamma: 0.99
+  evaluation_split:
+    train_ratio: 0.8
+    test_ratio: 0.2
+    test_window_months: null
   cost_config:
     transaction_cost_bp: 1.0
   risk_config:

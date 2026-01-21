@@ -13,6 +13,10 @@ base_spec:
   feature_set: "core_v1"
   policy: "equal_weight"
   policy_params: {}
+  evaluation_split:
+    train_ratio: 0.8
+    test_ratio: 0.2
+    test_window_months: null
   cost_config:
     transaction_cost_bp: 1.0
   risk_config:

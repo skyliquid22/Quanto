@@ -39,6 +39,7 @@ from research.policies.sma_weight_policy import SMAWeightPolicy, SMAWeightPolicy
 from research.runners.rollout import RolloutResult, run_rollout
 from research.risk import RiskConfig
 from research.strategies.sma_crossover import SMAStrategyConfig, run_sma_crossover
+from research.validation.data_health import run_data_health_preflight
 from scripts.build_canonical_datasets import build_missing_equity_ohlcv_canonical
 
 
@@ -611,6 +612,23 @@ def main() -> int:
         run_id_seed=args.run_id,
     )
 
+    try:
+        run_data_health_preflight(
+            symbols=symbols,
+            start_date=start,
+            end_date=end,
+            feature_set=args.feature_set,
+            data_root=data_root,
+            interval=interval,
+            calendar_mode=os.environ.get("QUANTO_DATA_HEALTH_CALENDAR_MODE", "union"),
+            parquet_engine=os.environ.get("QUANTO_DATA_HEALTH_PARQUET_ENGINE", "fastparquet"),
+            max_missing_ratio=_env_float("QUANTO_DATA_HEALTH_MAX_MISSING_RATIO", 0.01),
+            max_nan_ratio=_env_float("QUANTO_DATA_HEALTH_MAX_NAN_RATIO", 0.05),
+            strict=_env_flag("QUANTO_DATA_HEALTH_STRICT"),
+        )
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+
     split_requested = any(
         [
             getattr(args, "train_start_date", None),
@@ -717,6 +735,7 @@ def main() -> int:
             calendar=calendar,
             forward_fill_limit=3,
             regime_feature_set=panel_regime_feature,
+            data_root=data_root,
         )
         rows = panel.rows
         base_observation_columns = panel.observation_columns
@@ -1116,6 +1135,21 @@ def _write_png(path: Path, pixels: bytearray, width: int, height: int) -> None:
         handle.write(chunk(b"IHDR", ihdr))
         handle.write(chunk(b"IDAT", idat))
         handle.write(chunk(b"IEND", b""))
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float | None) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
 
 
 __all__ = ["parse_args", "main", "ensure_yearly_daily_coverage", "resolve_data_root"]

@@ -245,6 +245,77 @@ def evaluate_thresholds(
     return failures
 
 
+def run_data_health_preflight(
+    *,
+    symbols: Sequence[str],
+    start_date: date,
+    end_date: date,
+    feature_set: str | None,
+    data_root: Path | None = None,
+    interval: str = "daily",
+    calendar_mode: CalendarMode = "union",
+    parquet_engine: str = "fastparquet",
+    max_missing_ratio: float | None = 0.01,
+    max_nan_ratio: float | None = 0.05,
+    strict: bool = False,
+) -> Dict[str, Any]:
+    """Run a lightweight data health check before training/evaluation."""
+
+    load_result = load_canonical_equity_pandas(
+        symbols,
+        start_date,
+        end_date,
+        data_root=data_root,
+        interval=interval,
+        parquet_engine=parquet_engine,
+    )
+    canonical_report = compute_canonical_health(
+        load_result.slices,
+        start_date=start_date,
+        end_date=end_date,
+        calendar_mode=calendar_mode,
+    )
+
+    feature_report = None
+    feature_set_name = str(feature_set).strip() if feature_set else ""
+    if feature_set_name:
+        if is_universe_feature_set(feature_set_name):
+            feature_report = None
+        else:
+            frames, observation_columns = build_feature_frames(
+                feature_set=feature_set_name,
+                slices=load_result.slices,
+                start_date=start_date,
+                end_date=end_date,
+                data_root=data_root,
+            )
+            feature_report = compute_feature_health(frames, observation_columns)
+
+    failures = evaluate_thresholds(
+        canonical_report=canonical_report,
+        feature_report=feature_report,
+        max_missing_ratio=max_missing_ratio,
+        max_nan_ratio=max_nan_ratio,
+    )
+    payload = {
+        "canonical": canonical_report,
+        "features": feature_report,
+        "failures": failures,
+        "settings": {
+            "calendar_mode": calendar_mode,
+            "max_missing_ratio": max_missing_ratio,
+            "max_nan_ratio": max_nan_ratio,
+            "strict": strict,
+        },
+    }
+    if failures:
+        message = f"Data health preflight failed: {', '.join(failures)}"
+        if strict:
+            raise RuntimeError(message)
+        print(message)  # noqa: T201 - CLI warning
+    return payload
+
+
 def resolve_run_id(payload: Mapping[str, Any], *, prefix: str = "data_health") -> str:
     canonical = json.dumps(payload, sort_keys=True, default=str)
     digest = sha256(canonical.encode("utf-8")).hexdigest()[:12]
@@ -410,5 +481,6 @@ __all__ = [
     "compute_feature_health",
     "evaluate_thresholds",
     "load_canonical_equity_pandas",
+    "run_data_health_preflight",
     "resolve_run_id",
 ]

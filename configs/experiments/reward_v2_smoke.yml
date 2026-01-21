@@ -34,6 +34,10 @@ policy_params:
   fast_window: 20
   slow_window: 50
   reward_version: reward_v2
+evaluation_split:
+  train_ratio: 0.8
+  test_ratio: 0.2
+  test_window_months: null
 cost_config:
   transaction_cost_bp: 1.0
 risk_config:

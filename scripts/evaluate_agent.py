@@ -27,19 +27,25 @@ from research.datasets.canonical_equity_loader import build_union_calendar, load
 from research.eval.evaluate import EvalSeries, EvaluationMetadata, MetricConfig, evaluation_payload, from_rollout
 from research.envs.gym_weight_env import GymWeightTradingEnv
 from research.envs.signal_weight_env import SignalWeightEnvConfig, SignalWeightTradingEnv
-from research.features.feature_eng import build_sma_feature_result, build_universe_feature_results
+from research.features.feature_eng import (
+    build_sma_feature_result,
+    build_universe_feature_results,
+    resolve_regime_metadata,
+)
 from research.features.feature_registry import (
     FeatureSetResult,
     build_universe_feature_panel,
     default_regime_for_feature_set,
     is_universe_feature_set,
     normalize_feature_set_name,
+    normalize_regime_feature_set_name,
 )
 from research.policies.sma_weight_policy import SMAWeightPolicy, SMAWeightPolicyConfig
 from research.runners.rollout import run_rollout
 from research.strategies.sma_crossover import SMAStrategyConfig
 from research.training.ppo_trainer import EvaluationResult, evaluate as ppo_evaluate
 from research.risk import RiskConfig
+from research.validation.data_health import run_data_health_preflight
 from scripts.run_sma_finrl_rollout import ensure_yearly_daily_coverage
 
 
@@ -57,6 +63,7 @@ _CONFIG_KEYS = {
     "test_window_months",
     "interval",
     "feature_set",
+    "regime_feature_set",
     "policy",
     "fast_window",
     "slow_window",
@@ -111,6 +118,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--test-window-months", type=int, help="Optional test window metadata override.")
     parser.add_argument("--interval", default="daily", help="Bar interval (daily only in v1).")
     parser.add_argument("--feature-set", default="sma_v1", help="Feature set used for observations.")
+    parser.add_argument("--regime-feature-set", help="Override regime feature set for panel construction.")
     parser.add_argument(
         "--policy",
         choices=["equal_weight", "sma", "ppo"],
@@ -176,6 +184,23 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
         run_id_seed=args.run_id,
     )
 
+    try:
+        run_data_health_preflight(
+            symbols=symbols,
+            start_date=start,
+            end_date=end,
+            feature_set=args.feature_set,
+            data_root=data_root,
+            interval=interval,
+            calendar_mode=os.environ.get("QUANTO_DATA_HEALTH_CALENDAR_MODE", "union"),
+            parquet_engine=os.environ.get("QUANTO_DATA_HEALTH_PARQUET_ENGINE", "fastparquet"),
+            max_missing_ratio=_env_float("QUANTO_DATA_HEALTH_MAX_MISSING_RATIO", 0.01),
+            max_nan_ratio=_env_float("QUANTO_DATA_HEALTH_MAX_NAN_RATIO", 0.05),
+            strict=_env_flag("QUANTO_DATA_HEALTH_STRICT"),
+        )
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+
     train_start = _parse_optional_date(getattr(args, "train_start_date", None))
     train_end = _parse_optional_date(getattr(args, "train_end_date", None))
     test_start = _parse_optional_date(getattr(args, "test_start_date", None))
@@ -212,6 +237,7 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
         feature_hashes,
         feature_set_name,
         sma_config,
+        panel_regime_feature,
     ) = _build_feature_rows(symbols, slices, args, data_root, start, end)
     rows = _slice_rows_by_date(rows, eval_start, eval_end)
     if len(rows) < 2:
@@ -269,6 +295,7 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
         feature_set=feature_set_name,
         policy_id=policy_id,
         run_id=run_id,
+        regime_metadata=resolve_regime_metadata(panel_regime_feature),
         policy_details=policy_details,
         data_split=data_split,
     )
@@ -407,6 +434,7 @@ def _build_feature_rows(
     Dict[str, str],
     str,
     SMAStrategyConfig,
+    str | None,
 ]:
     sma_config = SMAStrategyConfig(fast_window=args.fast_window, slow_window=args.slow_window)
     per_symbol_features: Dict[str, FeatureSetResult] = {}
@@ -414,6 +442,9 @@ def _build_feature_rows(
     normalized_feature_set = normalize_feature_set_name(args.feature_set)
     multi_symbol = len(symbols) > 1
     panel_regime_feature = default_regime_for_feature_set(normalized_feature_set)
+    override_regime = getattr(args, "regime_feature_set", None)
+    if override_regime:
+        panel_regime_feature = normalize_regime_feature_set_name(override_regime)
     if not multi_symbol and is_universe_feature_set(normalized_feature_set):
         raise SystemExit(f"Feature set '{args.feature_set}' requires multi-symbol mode.")
     if multi_symbol and is_universe_feature_set(normalized_feature_set):
@@ -458,6 +489,7 @@ def _build_feature_rows(
             calendar=calendar,
             forward_fill_limit=3,
             regime_feature_set=panel_regime_feature,
+            data_root=data_root,
         )
         rows = panel.rows
         base_columns = panel.observation_columns
@@ -465,7 +497,7 @@ def _build_feature_rows(
         primary = symbols[0]
         rows = per_symbol_features[primary].frame.to_dict("records")
         base_columns = per_symbol_features[primary].observation_columns
-    return rows, base_columns, feature_hashes, feature_set_name, sma_config
+    return rows, base_columns, feature_hashes, feature_set_name, sma_config, panel_regime_feature
 
 
 def _load_config_defaults(path: str | None) -> Dict[str, Any]:
@@ -642,6 +674,21 @@ def _coerce_row_date(value: object) -> date:
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     path.write_text(canonical + "\n", encoding="utf-8")
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float | None) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
 
 
 __all__ = ["parse_args", "run_evaluation", "resolve_data_root"]
