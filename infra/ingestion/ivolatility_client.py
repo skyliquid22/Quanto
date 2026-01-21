@@ -66,7 +66,7 @@ class IvolatilityClient:
     """Small REST client with pagination, retries, and deterministic ordering."""
 
     DEFAULT_BASE_URL = "https://restapi.ivolatility.com"
-    DEFAULT_TIMEOUT = 15.0
+    DEFAULT_TIMEOUT = 1500.0
     DEFAULT_MAX_RETRIES = 3
     DEFAULT_BACKOFF = 1.5
     DEFAULT_MAX_BACKOFF = 10.0

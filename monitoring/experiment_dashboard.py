@@ -291,11 +291,15 @@ def main() -> None:
     default_root = get_data_root()
     data_root_input = st.sidebar.text_input("Data root", str(default_root))
     data_root = Path(data_root_input).expanduser()
-    registry_root = Path(st.sidebar.text_input("Experiments root", str(data_root / "experiments_legacy"))).expanduser()
+    registry_root = Path(
+        st.sidebar.text_input("Experiments root (new runs)", str(data_root / "experiments"))
+    ).expanduser()
 
     if st.sidebar.button("Refresh data"):
         st.cache_data.clear()
 
+    if registry_root.name == "experiments_legacy":
+        st.sidebar.warning("Legacy experiments selected. Switch to experiments for new runs only.")
     summaries = load_experiment_summaries(registry_root)
     if not summaries:
         st.warning(f"No experiments found under {registry_root}.")

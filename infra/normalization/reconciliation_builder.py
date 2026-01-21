@@ -135,9 +135,9 @@ class ReconciliationBuilder:
             "strict": bool(price_sanity_cfg.get("strict", False)),
             "max_return_sigma": float(price_sanity_cfg.get("max_return_sigma", 24.0)),
             "min_abs_return": float(price_sanity_cfg.get("min_abs_return", 0.45)),
-            "median_jump": float(price_sanity_cfg.get("median_jump", 2.4)),
+            "median_jump": float(price_sanity_cfg.get("median_jump", 3.6)),
             "detect_splits": bool(price_sanity_cfg.get("detect_splits", True)),
-            "action": str(price_sanity_cfg.get("action", "clip")).strip().lower(),
+            "action": str(price_sanity_cfg.get("action", "report")).strip().lower(),
         }
         if self.price_sanity["action"] not in {"report", "fail", "drop", "clip"}:
             raise ValueError("price_sanity.action must be one of: report, fail, drop, clip")

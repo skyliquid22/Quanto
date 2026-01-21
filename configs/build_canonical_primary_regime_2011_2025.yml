@@ -1,0 +1,10 @@
+# Canonical build runbook for primary regime universe (QQQ availability 2011+)
+data_sources_config: configs/data_sources.yml
+domains:
+  - equity_ohlcv
+symbols:
+  - SPY
+  - QQQ
+  - IWM
+start_date: "2011-01-01"
+end_date: "2025-12-31"

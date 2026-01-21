@@ -1,0 +1,15 @@
+# iVolatility equity backfill for primary regime universe (daily bars)
+vendor: ivolatility
+mode: rest
+
+domain_defaults:
+  equity_ohlcv:
+    interval: daily
+
+symbols:
+  - SPY
+  - QQQ
+  - IWM
+
+start_date: "2005-01-01"
+end_date: "2025-12-31"
