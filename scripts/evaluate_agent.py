@@ -8,7 +8,7 @@ import hashlib
 import json
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
@@ -48,6 +48,13 @@ _CONFIG_KEYS = {
     "symbols",
     "start_date",
     "end_date",
+    "train_start_date",
+    "train_end_date",
+    "test_start_date",
+    "test_end_date",
+    "train_ratio",
+    "test_ratio",
+    "test_window_months",
     "interval",
     "feature_set",
     "policy",
@@ -95,6 +102,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--start-date", required=True, help="Inclusive start date (YYYY-MM-DD).")
     parser.add_argument("--end-date", required=True, help="Inclusive end date (YYYY-MM-DD).")
+    parser.add_argument("--train-start-date", help="Optional in-sample start date (YYYY-MM-DD).")
+    parser.add_argument("--train-end-date", help="Optional in-sample end date (YYYY-MM-DD).")
+    parser.add_argument("--test-start-date", help="Optional OOS start date (YYYY-MM-DD).")
+    parser.add_argument("--test-end-date", help="Optional OOS end date (YYYY-MM-DD).")
+    parser.add_argument("--train-ratio", type=float, help="Optional train ratio metadata override.")
+    parser.add_argument("--test-ratio", type=float, help="Optional test ratio metadata override.")
+    parser.add_argument("--test-window-months", type=int, help="Optional test window metadata override.")
     parser.add_argument("--interval", default="daily", help="Bar interval (daily only in v1).")
     parser.add_argument("--feature-set", default="sma_v1", help="Feature set used for observations.")
     parser.add_argument(
@@ -162,6 +176,30 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
         run_id_seed=args.run_id,
     )
 
+    train_start = _parse_optional_date(getattr(args, "train_start_date", None))
+    train_end = _parse_optional_date(getattr(args, "train_end_date", None))
+    test_start = _parse_optional_date(getattr(args, "test_start_date", None))
+    test_end = _parse_optional_date(getattr(args, "test_end_date", None))
+    if (train_start is None) ^ (train_end is None):
+        raise SystemExit("train-start-date and train-end-date must be provided together.")
+    if (test_start is None) ^ (test_end is None):
+        raise SystemExit("test-start-date and test-end-date must be provided together.")
+    if train_start and train_end:
+        if train_end < train_start:
+            raise SystemExit("train-end-date cannot be before train-start-date.")
+        if train_start < start or train_end > end:
+            raise SystemExit("Train window must fall within the requested start/end range.")
+    if test_start and test_end:
+        if test_end < test_start:
+            raise SystemExit("test-end-date cannot be before test-start-date.")
+        if test_start < start or test_end > end:
+            raise SystemExit("Test window must fall within the requested start/end range.")
+    if train_end and test_start and train_end >= test_start:
+        raise SystemExit("Train window must end before test window starts.")
+
+    eval_start = test_start or start
+    eval_end = test_end or end
+
     slices, canonical_hashes = load_canonical_equity(symbols, start, end, data_root=data_root, interval=interval)
     for symbol in symbols:
         slice_data = slices.get(symbol)
@@ -175,6 +213,7 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
         feature_set_name,
         sma_config,
     ) = _build_feature_rows(symbols, slices, args, data_root, start, end)
+    rows = _slice_rows_by_date(rows, eval_start, eval_end)
     if len(rows) < 2:
         raise SystemExit("Not enough aligned feature rows to evaluate.")
 
@@ -191,15 +230,15 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
         feature_set=feature_set_name,
         sma_config=sma_config,
         inputs_used=combined_hashes,
-        start=start,
-        end=end,
+        start=eval_start,
+        end=eval_end,
         interval=interval,
     )
 
     run_id = args.run_id or _derive_run_id(
         symbols,
-        start,
-        end,
+        eval_start,
+        eval_end,
         interval,
         feature_set_name,
         policy_id,
@@ -208,15 +247,30 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
         policy_details,
     )
 
+    data_split = None
+    if train_start and train_end and test_start and test_end:
+        data_split = {
+            "train_start": train_start.isoformat(),
+            "train_end": train_end.isoformat(),
+            "test_start": test_start.isoformat(),
+            "test_end": test_end.isoformat(),
+            "train_ratio": float(args.train_ratio) if args.train_ratio is not None else None,
+            "test_ratio": float(args.test_ratio) if args.test_ratio is not None else None,
+            "test_window_months": int(args.test_window_months)
+            if args.test_window_months is not None
+            else None,
+        }
+
     metadata = EvaluationMetadata(
         symbols=tuple(symbols),
-        start_date=start.isoformat(),
-        end_date=end.isoformat(),
+        start_date=eval_start.isoformat(),
+        end_date=eval_end.isoformat(),
         interval=interval,
         feature_set=feature_set_name,
         policy_id=policy_id,
         run_id=run_id,
         policy_details=policy_details,
+        data_split=data_split,
     )
     payload = evaluation_payload(
         rollout_series,
@@ -550,6 +604,39 @@ def _build_rollout_metadata(
         },
         "policy": policy_details,
     }
+
+
+def _parse_optional_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    return date.fromisoformat(str(value))
+
+
+def _slice_rows_by_date(
+    rows: Sequence[Mapping[str, object]],
+    start: date,
+    end: date,
+) -> List[Mapping[str, object]]:
+    sliced: List[Mapping[str, object]] = []
+    for row in rows:
+        timestamp = row.get("timestamp")
+        row_date = _coerce_row_date(timestamp)
+        if row_date < start or row_date > end:
+            continue
+        sliced.append(row)
+    return sliced
+
+
+def _coerce_row_date(value: object) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if hasattr(value, "to_pydatetime"):
+        return value.to_pydatetime().date()
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    raise SystemExit("Row timestamp is missing or invalid.")
 
 
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:

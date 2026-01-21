@@ -153,6 +153,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--start-date", required=True, help="Inclusive start date (YYYY-MM-DD).")
     parser.add_argument("--end-date", required=True, help="Inclusive end date (YYYY-MM-DD).")
+    parser.add_argument("--train-start-date", help="Optional in-sample start date (YYYY-MM-DD).")
+    parser.add_argument("--train-end-date", help="Optional in-sample end date (YYYY-MM-DD).")
+    parser.add_argument("--test-start-date", help="Optional OOS start date (YYYY-MM-DD).")
+    parser.add_argument("--test-end-date", help="Optional OOS end date (YYYY-MM-DD).")
+    parser.add_argument("--train-ratio", type=float, help="Optional train ratio metadata override.")
+    parser.add_argument("--test-ratio", type=float, help="Optional test ratio metadata override.")
+    parser.add_argument("--test-window-months", type=int, help="Optional test window metadata override.")
     parser.add_argument("--interval", default="daily", help="Bar interval to use (daily only in v1).")
     parser.add_argument("--fast", type=int, default=20, help="Fast SMA window.")
     parser.add_argument("--slow", type=int, default=50, help="Slow SMA window.")
@@ -604,6 +611,39 @@ def main() -> int:
         run_id_seed=args.run_id,
     )
 
+    split_requested = any(
+        [
+            getattr(args, "train_start_date", None),
+            getattr(args, "train_end_date", None),
+            getattr(args, "test_start_date", None),
+            getattr(args, "test_end_date", None),
+        ]
+    )
+    if split_requested:
+        train_start = _parse_optional_date(getattr(args, "train_start_date", None))
+        train_end = _parse_optional_date(getattr(args, "train_end_date", None))
+        test_start = _parse_optional_date(getattr(args, "test_start_date", None))
+        test_end = _parse_optional_date(getattr(args, "test_end_date", None))
+        if (train_start is None) ^ (train_end is None):
+            raise SystemExit("train-start-date and train-end-date must be provided together.")
+        if (test_start is None) ^ (test_end is None):
+            raise SystemExit("test-start-date and test-end-date must be provided together.")
+        if not train_start or not train_end or not test_start or not test_end:
+            raise SystemExit("Both train and test windows must be provided when using split dates.")
+        if train_end < train_start:
+            raise SystemExit("train-end-date cannot be before train-start-date")
+        if test_end < test_start:
+            raise SystemExit("test-end-date cannot be before test-start-date")
+        if train_start < start or train_end > end:
+            raise SystemExit("Train window must fall within the requested start/end range.")
+        if test_start < start or test_end > end:
+            raise SystemExit("Test window must fall within the requested start/end range.")
+        if train_end >= test_start:
+            raise SystemExit("Train window must end before test window starts.")
+    else:
+        train_start, train_end = start, end
+        test_start, test_end = start, end
+
     canonical_manifest = bootstrap.canonical_manifest or _locate_canonical_manifest(
         data_root, args.canonical_domain, start, end
     )
@@ -681,6 +721,7 @@ def main() -> int:
         rows = panel.rows
         base_observation_columns = panel.observation_columns
 
+    rows = _slice_rows_by_date(rows, test_start, test_end)
     if len(rows) < 2:
         raise SystemExit("Not enough aligned feature rows to run the rollout")
 
@@ -694,8 +735,8 @@ def main() -> int:
     rollout_metadata = {
         "feature_set": feature_set_name or args.feature_set,
         "interval": interval,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
+        "start_date": test_start.isoformat(),
+        "end_date": test_end.isoformat(),
         "transaction_cost_bp": env_config.transaction_cost_bp,
         "risk_config": env_config.risk_config.to_dict(),
         "policy": {
@@ -709,8 +750,8 @@ def main() -> int:
 
     run_id = args.run_id or derive_run_id(
         symbols,
-        start,
-        end,
+        test_start,
+        test_end,
         sma_config,
         env_config,
         policy,
@@ -734,8 +775,8 @@ def main() -> int:
     payload = build_report_payload(
         run_id=run_id,
         symbols=result.symbols,
-        start=start,
-        end=end,
+        start=test_start,
+        end=test_end,
         sma_config=sma_config,
         env_config=env_config,
         policy=policy,
@@ -749,6 +790,7 @@ def main() -> int:
         feature_set=feature_set_name or args.feature_set,
         base_observation_columns=base_observation_columns,
         observation_headers=observation_headers,
+        data_split=_build_data_split_payload(args, train_start, train_end, test_start, test_end),
     )
     _write_report(report_path, payload)
     print(
@@ -837,6 +879,7 @@ def build_report_payload(
     feature_set: str,
     base_observation_columns: Sequence[str],
     observation_headers: Sequence[str],
+    data_split: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     symbol_list = list(symbols)
     primary_symbol = symbol_list[0] if symbol_list else ""
@@ -869,7 +912,7 @@ def build_report_payload(
         "report": _rel_path(report_path, data_root),
         "plot": _rel_path(plot_path, data_root),
     }
-    return {
+    payload = {
         "run_id": run_id,
         "interval": interval,
         "symbol": primary_symbol,
@@ -884,6 +927,9 @@ def build_report_payload(
         "bootstrap": bootstrap.as_payload(data_root),
         "rollout_metadata": result.metadata,
     }
+    if data_split is not None:
+        payload["data_split"] = data_split
+    return payload
 
 
 def _weights_series_for_report(result: RolloutResult) -> object:
@@ -906,6 +952,66 @@ def _weights_for_plot(weight_entries: Sequence[Mapping[str, float]], symbols: Se
     for entry in weight_entries:
         totals.append(sum(entry.get(symbol, 0.0) for symbol in symbols))
     return totals
+
+
+def _parse_optional_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    return date.fromisoformat(str(value))
+
+
+def _slice_rows_by_date(
+    rows: Sequence[Mapping[str, object]],
+    start: date,
+    end: date,
+) -> List[Mapping[str, object]]:
+    sliced: List[Mapping[str, object]] = []
+    for row in rows:
+        timestamp = row.get("timestamp")
+        row_date = _coerce_row_date(timestamp)
+        if row_date < start or row_date > end:
+            continue
+        sliced.append(row)
+    return sliced
+
+
+def _coerce_row_date(value: object) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if hasattr(value, "to_pydatetime"):
+        return value.to_pydatetime().date()
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    raise SystemExit("Row timestamp is missing or invalid.")
+
+
+def _build_data_split_payload(
+    args: argparse.Namespace,
+    train_start: date,
+    train_end: date,
+    test_start: date,
+    test_end: date,
+) -> Dict[str, Any] | None:
+    if not any(
+        [
+            getattr(args, "train_start_date", None),
+            getattr(args, "train_end_date", None),
+            getattr(args, "test_start_date", None),
+            getattr(args, "test_end_date", None),
+        ]
+    ):
+        return None
+    return {
+        "train_start": train_start.isoformat(),
+        "train_end": train_end.isoformat(),
+        "test_start": test_start.isoformat(),
+        "test_end": test_end.isoformat(),
+        "train_ratio": float(args.train_ratio) if args.train_ratio is not None else None,
+        "test_ratio": float(args.test_ratio) if args.test_ratio is not None else None,
+        "test_window_months": int(args.test_window_months) if args.test_window_months is not None else None,
+    }
 
 
 def _write_report(path: Path, payload: Dict[str, Any]) -> None:

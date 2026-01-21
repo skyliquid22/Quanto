@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
@@ -35,6 +36,8 @@ from research.strategies.sma_crossover import SMAStrategyConfig
 from scripts.evaluate_agent import run_evaluation as evaluate_cli, _derive_run_id
 from scripts.train_ppo_weight_agent import run_training as train_ppo_cli
 
+ALLOWED_TEST_WINDOWS = (1, 3, 4, 6, 12)
+
 
 @dataclass(frozen=True)
 class ExperimentResult:
@@ -47,6 +50,28 @@ class ExperimentResult:
     evaluation_summary: Mapping[str, Any]
     training_artifacts: Mapping[str, Path]
     rollout_artifact: Path
+
+
+@dataclass(frozen=True)
+class DataSplit:
+    train_start: date
+    train_end: date
+    test_start: date
+    test_end: date
+    train_ratio: float
+    test_ratio: float
+    test_window_months: int | None
+
+    def to_payload(self) -> Dict[str, Any]:
+        return {
+            "train_start": self.train_start.isoformat(),
+            "train_end": self.train_end.isoformat(),
+            "test_start": self.test_start.isoformat(),
+            "test_end": self.test_end.isoformat(),
+            "train_ratio": float(self.train_ratio),
+            "test_ratio": float(self.test_ratio),
+            "test_window_months": None if self.test_window_months is None else int(self.test_window_months),
+        }
 
 
 def run_experiment(
@@ -64,19 +89,20 @@ def run_experiment(
     registry.write_spec(spec, paths)
     resolved_data_root = _resolve_data_root(data_root)
     os.environ.setdefault("QUANTO_DATA_ROOT", str(resolved_data_root))
+    data_split = _resolve_data_split(spec, resolved_data_root)
 
     training_artifacts: Dict[str, Path] = {}
     checkpoint_path: Path | None = None
 
     if spec.policy == "ppo":
-        training_summary = _run_training(spec, resolved_data_root)
+        training_summary = _run_training(spec, resolved_data_root, data_split)
         checkpoint_path = _extract_checkpoint(training_summary, resolved_data_root)
         if checkpoint_path is None or not checkpoint_path.exists():
             raise RuntimeError("PPO training did not produce a checkpoint; cannot continue.")
         training_artifacts = _materialize_training_artifacts(training_summary, resolved_data_root, paths.runs_dir)
 
     evaluation_summary, evaluation_payload, metrics_src = _run_evaluation(
-        spec, resolved_data_root, paths.evaluation_dir, checkpoint_path
+        spec, resolved_data_root, paths.evaluation_dir, checkpoint_path, data_split
     )
     metrics_path = _finalize_metrics(metrics_src, paths.evaluation_dir)
     rollout_artifact = _write_rollout_artifact(spec, evaluation_payload, paths.runs_dir)
@@ -145,7 +171,7 @@ def run_sweep(
     return SweepResult(sweep_spec=sweep_spec, experiments=tuple(experiments))
 
 
-def _run_training(spec: ExperimentSpec, data_root: Path) -> Mapping[str, Any]:
+def _run_training(spec: ExperimentSpec, data_root: Path, data_split: DataSplit) -> Mapping[str, Any]:
     params = spec.policy_params
     fast_window = _require_int(params, "fast_window", spec.policy)
     slow_window = _require_int(params, "slow_window", spec.policy)
@@ -185,6 +211,13 @@ def _run_training(spec: ExperimentSpec, data_root: Path) -> Mapping[str, Any]:
         canonical_domain="equity_ohlcv",
         force_ingest=False,
         force_canonical_build=False,
+        train_start_date=data_split.train_start.isoformat(),
+        train_end_date=data_split.train_end.isoformat(),
+        test_start_date=data_split.test_start.isoformat(),
+        test_end_date=data_split.test_end.isoformat(),
+        train_ratio=data_split.train_ratio,
+        test_ratio=data_split.test_ratio,
+        test_window_months=data_split.test_window_months,
         max_weight=risk_cfg.max_weight,
         exposure_cap=risk_cfg.exposure_cap,
         min_cash=risk_cfg.min_cash,
@@ -236,9 +269,10 @@ def _run_evaluation(
     data_root: Path,
     evaluation_dir: Path,
     checkpoint_path: Path | None,
+    data_split: DataSplit,
 ) -> tuple[Mapping[str, Any], Dict[str, Any], Path]:
     if spec.hierarchy_enabled:
-        return _run_hierarchical_evaluation(spec, data_root, evaluation_dir)
+        return _run_hierarchical_evaluation(spec, data_root, evaluation_dir, data_split)
     policy = spec.policy
     params = dict(spec.policy_params)
     fast_window: int
@@ -288,6 +322,13 @@ def _run_evaluation(
         data_root=str(data_root),
         out_dir=str(evaluation_dir),
         run_id=spec.experiment_id,
+        train_start_date=data_split.train_start.isoformat(),
+        train_end_date=data_split.train_end.isoformat(),
+        test_start_date=data_split.test_start.isoformat(),
+        test_end_date=data_split.test_end.isoformat(),
+        train_ratio=data_split.train_ratio,
+        test_ratio=data_split.test_ratio,
+        test_window_months=data_split.test_window_months,
         max_weight=risk_cfg.max_weight,
         exposure_cap=risk_cfg.exposure_cap,
         min_cash=risk_cfg.min_cash,
@@ -307,6 +348,7 @@ def _run_hierarchical_evaluation(
     spec: ExperimentSpec,
     data_root: Path,
     evaluation_dir: Path,
+    data_split: DataSplit,
 ) -> tuple[Mapping[str, Any], Dict[str, Any], Path]:
     symbols = list(spec.symbols)
     if len(symbols) < 2:
@@ -328,6 +370,9 @@ def _run_hierarchical_evaluation(
         feature_set_name,
         sma_config,
     ) = _build_hierarchical_rows(spec, slices, data_root)
+    rows = _slice_rows_by_date(rows, data_split.test_start, data_split.test_end)
+    if len(rows) < 2:
+        raise ValueError("Not enough aligned feature rows in the test window for hierarchical evaluation.")
     env_config = SignalWeightEnvConfig(
         transaction_cost_bp=spec.cost_config.transaction_cost_bp,
         risk_config=spec.risk_config,
@@ -349,8 +394,8 @@ def _run_hierarchical_evaluation(
     policy_id = _hierarchical_policy_id(policy_signature)
     metadata = EvaluationMetadata(
         symbols=tuple(symbols),
-        start_date=spec.start_date.isoformat(),
-        end_date=spec.end_date.isoformat(),
+        start_date=data_split.test_start.isoformat(),
+        end_date=data_split.test_end.isoformat(),
         interval=spec.interval,
         feature_set=feature_set_name,
         policy_id=policy_id,
@@ -374,6 +419,7 @@ def _run_hierarchical_evaluation(
                 "slow_window": sma_config.slow_window,
             },
         },
+        data_split=data_split.to_payload(),
     )
     series = from_rollout(
         timestamps=rollout.timestamps,
@@ -531,6 +577,174 @@ def _optional_int(params: Mapping[str, Any], key: str) -> int | None:
         return int(params[key])
     except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
         raise ValueError(f"{key} must be an integer.") from exc
+
+
+def _resolve_data_split(spec: ExperimentSpec, data_root: Path) -> DataSplit:
+    split_config = spec.evaluation_split
+    train_ratio = split_config.train_ratio if split_config else 0.8
+    test_ratio = split_config.test_ratio if split_config else 0.2
+    test_window_months = split_config.test_window_months if split_config else None
+
+    slices, _ = load_canonical_equity(
+        list(spec.symbols),
+        spec.start_date,
+        spec.end_date,
+        data_root=data_root,
+        interval=spec.interval,
+    )
+    calendar = build_union_calendar(slices, start_date=spec.start_date, end_date=spec.end_date)
+    session_dates = [timestamp.date() for timestamp in calendar]
+    return _resolve_split_from_sessions(
+        session_dates,
+        train_ratio=train_ratio,
+        test_ratio=test_ratio,
+        test_window_months=test_window_months,
+    )
+
+
+def _resolve_split_from_sessions(
+    session_dates: Sequence[date],
+    *,
+    train_ratio: float,
+    test_ratio: float,
+    test_window_months: int | None,
+) -> DataSplit:
+    if not session_dates:
+        raise ValueError("No trading sessions available to resolve evaluation split.")
+    ordered = sorted(dict.fromkeys(session_dates))
+    total_sessions = len(ordered)
+    if total_sessions < 2:
+        raise ValueError("Evaluation split requires at least two trading sessions.")
+    range_start = ordered[0]
+    range_end = ordered[-1]
+
+    if _is_short_range(ordered):
+        test_sessions = _fallback_test_sessions(total_sessions)
+        train_sessions = max(total_sessions - test_sessions, 1)
+        test_sessions = total_sessions - train_sessions
+        train_end = ordered[train_sessions - 1]
+        test_start = ordered[train_sessions]
+        return DataSplit(
+            train_start=range_start,
+            train_end=train_end,
+            test_start=test_start,
+            test_end=range_end,
+            train_ratio=train_sessions / total_sessions,
+            test_ratio=test_sessions / total_sessions,
+            test_window_months=None,
+        )
+
+    if test_window_months is None:
+        target_sessions = total_sessions * test_ratio
+        selected_months = _closest_allowed_window(ordered, target_sessions)
+    else:
+        selected_months = test_window_months
+
+    test_sessions = _count_sessions_in_last_months(ordered, selected_months)
+    min_month_sessions = _count_sessions_in_last_months(ordered, 1)
+    if test_sessions < min_month_sessions:
+        selected_months = 1
+        test_sessions = min_month_sessions
+    if test_sessions >= total_sessions:
+        test_sessions = max(min_month_sessions, total_sessions // 2, 1)
+    if test_sessions >= total_sessions:
+        test_sessions = total_sessions - 1
+
+    train_sessions = max(total_sessions - test_sessions, 1)
+    test_sessions = total_sessions - train_sessions
+    train_end = ordered[train_sessions - 1]
+    test_start = ordered[train_sessions]
+    return DataSplit(
+        train_start=range_start,
+        train_end=train_end,
+        test_start=test_start,
+        test_end=range_end,
+        train_ratio=train_sessions / total_sessions,
+        test_ratio=test_sessions / total_sessions,
+        test_window_months=selected_months,
+    )
+
+
+def _closest_allowed_window(session_dates: Sequence[date], target_sessions: float) -> int:
+    best_months = ALLOWED_TEST_WINDOWS[0]
+    best_diff = float("inf")
+    for months in ALLOWED_TEST_WINDOWS:
+        count = _count_sessions_in_last_months(session_dates, months)
+        diff = abs(count - target_sessions)
+        if diff < best_diff or (diff == best_diff and months < best_months):
+            best_diff = diff
+            best_months = months
+    return best_months
+
+
+def _count_sessions_in_last_months(session_dates: Sequence[date], months: int) -> int:
+    if not session_dates:
+        return 0
+    target_months = _recent_months(session_dates[-1], months)
+    return sum(1 for value in session_dates if (value.year, value.month) in target_months)
+
+
+def _is_short_range(session_dates: Sequence[date]) -> bool:
+    months = {(value.year, value.month) for value in session_dates}
+    return len(months) <= 1
+
+
+def _fallback_test_sessions(total_sessions: int) -> int:
+    half = max(total_sessions // 2, 1)
+    minimum = min(10, max(total_sessions - 1, 1))
+    return max(half, minimum)
+
+
+def _subtract_months(value: date, months: int) -> date:
+    import calendar
+
+    year = value.year
+    month = value.month - months
+    while month <= 0:
+        month += 12
+        year -= 1
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(value.day, last_day))
+
+
+def _recent_months(end_date: date, months: int) -> set[tuple[int, int]]:
+    year = end_date.year
+    month = end_date.month
+    results: set[tuple[int, int]] = set()
+    for _ in range(months):
+        results.add((year, month))
+        month -= 1
+        if month <= 0:
+            month = 12
+            year -= 1
+    return results
+
+
+def _slice_rows_by_date(
+    rows: Sequence[Mapping[str, object]],
+    start: date,
+    end: date,
+) -> List[Mapping[str, object]]:
+    sliced: List[Mapping[str, object]] = []
+    for row in rows:
+        timestamp = row.get("timestamp")
+        row_date = _coerce_row_date(timestamp)
+        if row_date < start or row_date > end:
+            continue
+        sliced.append(row)
+    return sliced
+
+
+def _coerce_row_date(value: object) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if hasattr(value, "to_pydatetime"):
+        return value.to_pydatetime().date()
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    raise ValueError("Row timestamp is missing or invalid.")
 
 
 __all__ = ["ExperimentResult", "run_experiment", "run_sweep", "SweepResult"]

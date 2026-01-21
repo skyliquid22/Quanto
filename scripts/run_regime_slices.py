@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import date, datetime
 from pathlib import Path
+from typing import Dict, Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover
@@ -39,12 +41,16 @@ def main(argv: list[str] | None = None) -> int:
 
     evaluation_dir = experiment_dir / "evaluation"
     timeseries_path = evaluation_dir / "timeseries.json"
+    rollout = load_rollout_json(experiment_dir)
+    data_split = _extract_data_split(rollout)
     if args.force or not timeseries_path.exists():
-        rollout = load_rollout_json(experiment_dir)
         timeseries = extract_timeseries_from_rollout(rollout)
-        write_timeseries_json(experiment_dir, timeseries)
     else:
         timeseries = json.loads(timeseries_path.read_text(encoding="utf-8"))
+    if data_split is not None:
+        timeseries = _slice_timeseries(timeseries, data_split["test_start"], data_split["test_end"])
+    if args.force or not timeseries_path.exists() or data_split is not None:
+        write_timeseries_json(experiment_dir, timeseries)
 
     regime_payload = timeseries.get("regime")
     if not regime_payload:
@@ -78,6 +84,70 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"Wrote {slices_path}")
     return 0
+
+
+def _extract_data_split(rollout: Mapping[str, object]) -> Dict[str, date] | None:
+    metadata = rollout.get("metadata") if isinstance(rollout, Mapping) else None
+    if not isinstance(metadata, Mapping):
+        return None
+    split = metadata.get("data_split")
+    if not isinstance(split, Mapping):
+        return None
+    test_start = _parse_date(split.get("test_start"))
+    test_end = _parse_date(split.get("test_end"))
+    if not test_start or not test_end:
+        return None
+    return {"test_start": test_start, "test_end": test_end}
+
+
+def _parse_date(value: object) -> date | None:
+    if not value:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    return None
+
+
+def _slice_timeseries(timeseries: Mapping[str, object], start: date, end: date) -> Dict[str, object]:
+    timestamps = list(timeseries.get("timestamps") or [])
+    indices = [
+        idx
+        for idx, value in enumerate(timestamps)
+        if start <= _coerce_date(value) <= end
+    ]
+    if not indices:
+        raise ValueError("No timeseries data overlaps the requested test window.")
+    start_idx = indices[0]
+    end_idx = indices[-1]
+    sliced = dict(timeseries)
+    for key in ("timestamps", "returns", "exposures", "turnover_by_step"):
+        series = list(timeseries.get(key) or [])
+        if series:
+            sliced[key] = series[start_idx : end_idx + 1]
+    regime = timeseries.get("regime")
+    if isinstance(regime, Mapping):
+        values = list(regime.get("series") or [])
+        sliced_regime = dict(regime)
+        if values:
+            sliced_regime["series"] = values[start_idx : end_idx + 1]
+        sliced["regime"] = sliced_regime
+    return sliced
+
+
+def _coerce_date(value: object) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if hasattr(value, "to_pydatetime"):
+        return value.to_pydatetime().date()
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    raise ValueError("Invalid timestamp in timeseries payload.")
 
 
 if __name__ == "__main__":  # pragma: no cover

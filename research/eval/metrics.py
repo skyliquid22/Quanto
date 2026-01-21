@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import date, datetime
 import math
 from statistics import median
 from typing import Dict, List, Mapping, Sequence, Tuple, Literal
@@ -106,10 +107,22 @@ def compute_metric_bundle(
     regime_feature_series: Sequence[Sequence[float]] | None = None,
     regime_feature_names: Sequence[str] | None = None,
     mode_series: Sequence[str] | None = None,
+    timestamps: Sequence[object] | None = None,
+    window: Tuple[date, date] | None = None,
 ) -> MetricResult:
     """Compute portfolio, trading, and safety metrics."""
 
     cfg = config or MetricConfig()
+    if window is not None and timestamps is not None:
+        account_values, weights, transaction_costs, regime_feature_series, mode_series = _slice_metric_inputs(
+            account_values,
+            weights,
+            transaction_costs,
+            regime_feature_series,
+            mode_series,
+            timestamps,
+            window,
+        )
     returns = _simple_returns(account_values)
     perf = _performance_metrics(account_values, returns, cfg)
     trading, constraint_diag, exposures, turnover_by_step = _trading_metrics(
@@ -164,6 +177,63 @@ def compute_metric_bundle(
         performance_by_regime=regime_result.performance_by_regime if regime_result else None,
         stability=stability,
     )
+
+
+def _slice_metric_inputs(
+    account_values: Sequence[float],
+    weights: Sequence[Mapping[str, float]],
+    transaction_costs: Sequence[float] | None,
+    regime_feature_series: Sequence[Sequence[float]] | None,
+    mode_series: Sequence[str] | None,
+    timestamps: Sequence[object],
+    window: Tuple[date, date],
+) -> Tuple[
+    Sequence[float],
+    Sequence[Mapping[str, float]],
+    Sequence[float] | None,
+    Sequence[Sequence[float]] | None,
+    Sequence[str] | None,
+]:
+    if not account_values or not timestamps:
+        return account_values, weights, transaction_costs, regime_feature_series, mode_series
+    if len(timestamps) != len(account_values):
+        raise ValueError("timestamps length must match account_values length for window slicing")
+    start_date, end_date = window
+    if end_date < start_date:
+        raise ValueError("window end_date cannot be earlier than start_date")
+    indices = [
+        idx
+        for idx, value in enumerate(timestamps)
+        if start_date <= _coerce_date(value) <= end_date
+    ]
+    if not indices:
+        raise ValueError("window does not overlap provided timestamps")
+    start_idx = indices[0]
+    end_idx = indices[-1]
+    sliced_account_values = list(account_values[start_idx : end_idx + 1])
+    sliced_weights = list(weights[start_idx : end_idx + 1])
+    sliced_costs = None
+    if transaction_costs is not None:
+        sliced_costs = list(transaction_costs[start_idx:end_idx])
+    sliced_regime = None
+    if regime_feature_series is not None:
+        sliced_regime = list(regime_feature_series[start_idx:end_idx])
+    sliced_modes = None
+    if mode_series is not None:
+        sliced_modes = list(mode_series[start_idx:end_idx])
+    return sliced_account_values, sliced_weights, sliced_costs, sliced_regime, sliced_modes
+
+
+def _coerce_date(value: object) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if hasattr(value, "to_pydatetime"):
+        return value.to_pydatetime().date()
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    raise ValueError("Unable to parse timestamp for window slicing.")
 
 
 def _performance_metrics(

@@ -33,6 +33,26 @@ class CostConfig:
 
 
 @dataclass(frozen=True)
+class EvaluationSplitConfig:
+    """Optional evaluation split configuration for in/out-of-sample windows."""
+
+    train_ratio: float
+    test_ratio: float
+    test_window_months: int | None = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "train_ratio": float(self.train_ratio),
+            "test_ratio": float(self.test_ratio),
+            "test_window_months": None if self.test_window_months is None else int(self.test_window_months),
+        }
+
+
+def _default_evaluation_split() -> EvaluationSplitConfig:
+    return EvaluationSplitConfig(train_ratio=0.8, test_ratio=0.2, test_window_months=None)
+
+
+@dataclass(frozen=True)
 class ExperimentSpec:
     """Immutable experiment specification with canonical serialization."""
 
@@ -46,6 +66,7 @@ class ExperimentSpec:
     policy_params: Mapping[str, Any]
     cost_config: CostConfig
     seed: int
+    evaluation_split: EvaluationSplitConfig | None = None
     risk_config: RiskConfig = RiskConfig()
     notes: str | None = None
     regime_feature_set: str | None = None
@@ -83,6 +104,7 @@ class ExperimentSpec:
             raise ValueError("policy must be one of: equal_weight, sma, ppo")
         policy_params = _normalize_mapping(payload.get("policy_params") or {})
         cost_config = _build_cost_config(payload.get("cost_config"))
+        evaluation_split = _build_evaluation_split(payload.get("evaluation_split"))
         risk_config = _build_risk_config(payload.get("risk_config"))
         seed = _coerce_int(payload.get("seed"), "seed")
         notes = payload.get("notes")
@@ -121,6 +143,7 @@ class ExperimentSpec:
             cost_config=cost_config,
             risk_config=risk_config,
             seed=seed,
+            evaluation_split=evaluation_split,
             notes=normalized_notes,
             regime_feature_set=normalized_regime,
             hierarchy_enabled=hierarchy_enabled,
@@ -130,6 +153,7 @@ class ExperimentSpec:
 
     @property
     def canonical_dict(self) -> Dict[str, Any]:
+        evaluation_split = self.evaluation_split or _default_evaluation_split()
         payload: Dict[str, Any] = {
             "experiment_name": self.experiment_name,
             "symbols": list(self.symbols),
@@ -143,6 +167,7 @@ class ExperimentSpec:
             "cost_config": self.cost_config.to_dict(),
             "risk_config": self.risk_config.to_dict(),
             "seed": int(self.seed),
+            "evaluation_split": evaluation_split.to_dict(),
             "notes": self.notes or "",
             "hierarchy_enabled": bool(self.hierarchy_enabled),
             "controller_config": _canonicalize(self.controller_config or {}),
@@ -162,11 +187,13 @@ class ExperimentSpec:
         return _sha256_hex(digest)
 
     def to_dict(self) -> Dict[str, Any]:
+        evaluation_split = self.evaluation_split or _default_evaluation_split()
         payload = dict(self.canonical_dict)
         if self.notes is None:
             payload.pop("notes", None)
         if self.regime_feature_set is None:
             payload.pop("regime_feature_set", None)
+        payload["evaluation_split"] = evaluation_split.to_dict()
         if not self.hierarchy_enabled:
             payload.pop("hierarchy_enabled", None)
             payload.pop("controller_config", None)
@@ -315,6 +342,30 @@ def _build_cost_config(payload: Any) -> CostConfig:
     return CostConfig(transaction_cost_bp=transaction_cost, slippage_bp=slippage_value)
 
 
+def _build_evaluation_split(payload: Any) -> EvaluationSplitConfig | None:
+    if payload is None:
+        return None
+    if not isinstance(payload, Mapping):
+        raise ValueError("evaluation_split must be provided as a mapping when present.")
+    train_ratio = float(payload.get("train_ratio", 0.8))
+    test_ratio = float(payload.get("test_ratio", 0.2))
+    if abs((train_ratio + test_ratio) - 1.0) > 1e-6:
+        raise ValueError("evaluation_split ratios must sum to 1.0.")
+    if train_ratio <= 0 or test_ratio <= 0:
+        raise ValueError("evaluation_split ratios must be positive.")
+    test_window_months = payload.get("test_window_months")
+    resolved_months = None
+    if test_window_months is not None:
+        resolved_months = int(test_window_months)
+        if resolved_months not in {1, 3, 4, 6, 12}:
+            raise ValueError("evaluation_split.test_window_months must be one of: 1, 3, 4, 6, 12.")
+    return EvaluationSplitConfig(
+        train_ratio=train_ratio,
+        test_ratio=test_ratio,
+        test_window_months=resolved_months,
+    )
+
+
 def _build_risk_config(payload: Any) -> RiskConfig:
     if payload is None:
         return RiskConfig()
@@ -350,4 +401,4 @@ def _sha256_hex(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-__all__ = ["CostConfig", "ExperimentSpec", "RiskConfig"]
+__all__ = ["CostConfig", "EvaluationSplitConfig", "ExperimentSpec", "RiskConfig"]

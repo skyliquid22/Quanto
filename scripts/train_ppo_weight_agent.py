@@ -9,9 +9,9 @@ import json
 import os
 import sys
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Mapping, Sequence
 from types import SimpleNamespace
 
 import pandas as pd
@@ -62,6 +62,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--start-date", required=True, help="Inclusive start date (YYYY-MM-DD).")
     parser.add_argument("--end-date", required=True, help="Inclusive end date (YYYY-MM-DD).")
+    parser.add_argument("--train-start-date", help="Optional in-sample start date (YYYY-MM-DD).")
+    parser.add_argument("--train-end-date", help="Optional in-sample end date (YYYY-MM-DD).")
+    parser.add_argument("--test-start-date", help="Optional OOS start date (YYYY-MM-DD).")
+    parser.add_argument("--test-end-date", help="Optional OOS end date (YYYY-MM-DD).")
+    parser.add_argument("--train-ratio", type=float, help="Optional train ratio metadata override.")
+    parser.add_argument("--test-ratio", type=float, help="Optional test ratio metadata override.")
+    parser.add_argument("--test-window-months", type=int, help="Optional test window metadata override.")
     parser.add_argument("--interval", default="daily", help="Bar interval to use (daily only in v1).")
     parser.add_argument("--fast-window", type=int, default=20, help="Fast SMA window for features.")
     parser.add_argument("--slow-window", type=int, default=50, help="Slow SMA window for features.")
@@ -333,6 +340,39 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         run_id_seed=args.run_id,
     )
 
+    split_requested = any(
+        [
+            getattr(args, "train_start_date", None),
+            getattr(args, "train_end_date", None),
+            getattr(args, "test_start_date", None),
+            getattr(args, "test_end_date", None),
+        ]
+    )
+    if split_requested:
+        train_start = _parse_optional_date(getattr(args, "train_start_date", None))
+        train_end = _parse_optional_date(getattr(args, "train_end_date", None))
+        test_start = _parse_optional_date(getattr(args, "test_start_date", None))
+        test_end = _parse_optional_date(getattr(args, "test_end_date", None))
+        if (train_start is None) ^ (train_end is None):
+            raise SystemExit("train-start-date and train-end-date must be provided together.")
+        if (test_start is None) ^ (test_end is None):
+            raise SystemExit("test-start-date and test-end-date must be provided together.")
+        if not train_start or not train_end or not test_start or not test_end:
+            raise SystemExit("Both train and test windows must be provided when using split dates.")
+        if train_end < train_start:
+            raise SystemExit("train-end-date cannot be before train-start-date")
+        if test_end < test_start:
+            raise SystemExit("test-end-date cannot be before test-start-date")
+        if train_start < start or train_end > end:
+            raise SystemExit("Train window must fall within the requested start/end range.")
+        if test_start < start or test_end > end:
+            raise SystemExit("Test window must fall within the requested start/end range.")
+        if train_end >= test_start:
+            raise SystemExit("Train window must end before test window starts.")
+    else:
+        train_start, train_end = start, end
+        test_start, test_end = start, end
+
     canonical_manifest = bootstrap.canonical_manifest or _locate_canonical_manifest(
         data_root, args.canonical_domain, start, end
     )
@@ -418,12 +458,18 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
 
     risk_config = _build_risk_config(args)
     env_config = SignalWeightEnvConfig(transaction_cost_bp=args.transaction_cost_bp, risk_config=risk_config)
-    train_env = GymWeightTradingEnv(rows, config=env_config, observation_columns=base_observation_columns)
-    eval_env = GymWeightTradingEnv(rows, config=env_config, observation_columns=base_observation_columns)
+    train_rows = _slice_rows_by_date(rows, train_start, train_end)
+    test_rows = _slice_rows_by_date(rows, test_start, test_end)
+    if len(train_rows) < 2:
+        raise SystemExit("Not enough feature rows in the training window.")
+    if len(test_rows) < 2:
+        raise SystemExit("Not enough feature rows in the test window.")
+    train_env = GymWeightTradingEnv(train_rows, config=env_config, observation_columns=base_observation_columns)
+    eval_env = GymWeightTradingEnv(test_rows, config=env_config, observation_columns=base_observation_columns)
     observation_headers = train_env.inner_env.observation_columns
 
     try:
-        train_start = time.perf_counter()
+        train_start_time = time.perf_counter()
         model = train_ppo(
             train_env,
             total_timesteps=args.timesteps,
@@ -435,7 +481,7 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         )
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
-    duration_seconds = time.perf_counter() - train_start
+    duration_seconds = time.perf_counter() - train_start_time
 
     eval_result = evaluate(model, eval_env)
     combined_hashes = dict(canonical_hashes)
@@ -471,11 +517,12 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
 
     model_path = save_model(model, data_root / "models" / f"ppo_{run_id}.zip")
 
+    data_split = _build_data_split_payload(args, train_start, train_end, test_start, test_end)
     train_payload = build_train_report(
         run_id=run_id,
         symbols=symbols,
-        start=start,
-        end=end,
+        start=train_start,
+        end=train_end,
         interval=interval,
         args=args,
         env_config=env_config,
@@ -489,12 +536,13 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         feature_set=feature_set_name or args.feature_set,
         base_observation_columns=base_observation_columns,
         observation_headers=observation_headers,
+        data_split=data_split,
     )
     eval_payload = build_eval_report(
         run_id=run_id,
         symbols=symbols,
-        start=start,
-        end=end,
+        start=test_start,
+        end=test_end,
         interval=interval,
         env_config=env_config,
         sma_config=sma_config,
@@ -508,6 +556,7 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         feature_set=feature_set_name or args.feature_set,
         base_observation_columns=base_observation_columns,
         observation_headers=observation_headers,
+        data_split=data_split,
     )
 
     _write_report(train_report_path, train_payload)
@@ -580,6 +629,7 @@ def build_train_report(
     feature_set: str,
     base_observation_columns: Sequence[str],
     observation_headers: Sequence[str],
+    data_split: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     symbol_list = list(symbols)
     primary_symbol = symbol_list[0] if symbol_list else ""
@@ -600,7 +650,7 @@ def build_train_report(
     if model_path:
         artifacts["model"] = _rel_path(model_path, data_root)
         hashes["model_zip"] = compute_file_hash(model_path)
-    return {
+    payload = {
         "run_id": run_id,
         "symbol": primary_symbol,
         "symbols": symbol_list,
@@ -625,6 +675,9 @@ def build_train_report(
         "inputs_used": hashes["canonical_files"],
         "artifacts": artifacts,
     }
+    if data_split is not None:
+        payload["data_split"] = data_split
+    return payload
 
 
 def build_eval_report(
@@ -646,6 +699,7 @@ def build_eval_report(
     feature_set: str,
     base_observation_columns: Sequence[str],
     observation_headers: Sequence[str],
+    data_split: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     symbol_list = list(symbols)
     primary_symbol = symbol_list[0] if symbol_list else ""
@@ -670,7 +724,7 @@ def build_eval_report(
         "report": _rel_path(report_path, data_root),
         "plot": _rel_path(plot_path, data_root),
     }
-    return {
+    payload = {
         "run_id": run_id,
         "symbol": primary_symbol,
         "symbols": symbol_list,
@@ -697,6 +751,9 @@ def build_eval_report(
         "inputs_used": hashes["canonical_files"],
         "artifacts": artifacts,
     }
+    if data_split is not None:
+        payload["data_split"] = data_split
+    return payload
 
 
 def derive_run_id(
@@ -752,6 +809,66 @@ def derive_run_id(
         json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     ).hexdigest()
     return f"ppo_weight_{digest[:12]}"
+
+
+def _parse_optional_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    return date.fromisoformat(str(value))
+
+
+def _slice_rows_by_date(
+    rows: Sequence[Mapping[str, object]],
+    start: date,
+    end: date,
+) -> List[Mapping[str, object]]:
+    sliced: List[Mapping[str, object]] = []
+    for row in rows:
+        timestamp = row.get("timestamp")
+        row_date = _coerce_row_date(timestamp)
+        if row_date < start or row_date > end:
+            continue
+        sliced.append(row)
+    return sliced
+
+
+def _coerce_row_date(value: object) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if hasattr(value, "to_pydatetime"):
+        return value.to_pydatetime().date()
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    raise SystemExit("Row timestamp is missing or invalid.")
+
+
+def _build_data_split_payload(
+    args: argparse.Namespace,
+    train_start: date,
+    train_end: date,
+    test_start: date,
+    test_end: date,
+) -> Dict[str, Any] | None:
+    if not any(
+        [
+            getattr(args, "train_start_date", None),
+            getattr(args, "train_end_date", None),
+            getattr(args, "test_start_date", None),
+            getattr(args, "test_end_date", None),
+        ]
+    ):
+        return None
+    return {
+        "train_start": train_start.isoformat(),
+        "train_end": train_end.isoformat(),
+        "test_start": test_start.isoformat(),
+        "test_end": test_end.isoformat(),
+        "train_ratio": float(args.train_ratio) if args.train_ratio is not None else None,
+        "test_ratio": float(args.test_ratio) if args.test_ratio is not None else None,
+        "test_window_months": int(args.test_window_months) if args.test_window_months is not None else None,
+    }
 
 
 __all__ = ["parse_args", "run_training", "main"]

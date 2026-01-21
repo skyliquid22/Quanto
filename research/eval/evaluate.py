@@ -31,6 +31,7 @@ class EvaluationMetadata:
     policy_id: str
     run_id: str
     policy_details: Mapping[str, Any] | None = None
+    data_split: Mapping[str, Any] | None = None
 
 
 def evaluation_payload(
@@ -52,6 +53,7 @@ def evaluation_payload(
         regime_feature_series=series.regime_features,
         regime_feature_names=series.regime_feature_names,
         mode_series=series.modes,
+        timestamps=series.timestamps,
     )
     metadata_section = _metadata_section(metadata, series.rollout_metadata)
     payload = {
@@ -117,6 +119,8 @@ def _metadata_section(metadata: EvaluationMetadata, rollout_metadata: Mapping[st
     }
     if metadata.policy_details:
         payload["policy"] = dict(metadata.policy_details)
+    if metadata.data_split:
+        payload["data_split"] = dict(metadata.data_split)
     if rollout_metadata:
         payload["rollout"] = dict(rollout_metadata)
     return payload

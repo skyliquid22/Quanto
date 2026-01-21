@@ -8,7 +8,7 @@ import pytest
 from scripts import run_regime_slices
 
 
-def _write_rollout(path: Path, *, include_regime: bool) -> None:
+def _write_rollout(path: Path, *, include_regime: bool, data_split: dict[str, str] | None = None) -> None:
     payload = {
         "metadata": {
             "symbols": ["AAA", "BBB"],
@@ -24,6 +24,8 @@ def _write_rollout(path: Path, *, include_regime: bool) -> None:
             "weights": {"AAA": [0.0, 0.6, 0.4], "BBB": [0.0, 0.4, 0.6]},
         },
     }
+    if data_split:
+        payload["metadata"]["data_split"] = data_split
     if include_regime:
         payload["series"]["regime"] = {
             "feature_names": ["market_vol_20d", "market_trend_20d"],
@@ -65,3 +67,30 @@ def test_run_regime_slices_without_regime_series(tmp_path):
     slices_path = exp_dir / "evaluation" / "regime_slices.json"
     assert ts_path.exists()
     assert not slices_path.exists()
+
+
+def test_run_regime_slices_applies_oos_window(tmp_path):
+    data_root = tmp_path / "data"
+    exp_dir = data_root / "experiments" / "exp789"
+    (exp_dir / "runs").mkdir(parents=True)
+    (exp_dir / "evaluation").mkdir(parents=True)
+    _write_rollout(
+        exp_dir / "runs" / "rollout.json",
+        include_regime=True,
+        data_split={
+            "train_start": "2023-01-02",
+            "train_end": "2023-01-02",
+            "test_start": "2023-01-04",
+            "test_end": "2023-01-04",
+            "train_ratio": 0.5,
+            "test_ratio": 0.5,
+            "test_window_months": 1,
+        },
+    )
+    result = run_regime_slices.main(
+        ["--experiment-id", "exp789", "--data-root", str(data_root)]
+    )
+    assert result == 0
+    ts_path = exp_dir / "evaluation" / "timeseries.json"
+    timeseries = json.loads(ts_path.read_text(encoding="utf-8"))
+    assert timeseries["timestamps"] == ["2023-01-04T00:00:00+00:00"]

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
 
 from research.experiments import ExperimentRegistry, ExperimentSpec, run_experiment
@@ -76,3 +76,10 @@ def test_experiment_determinism(tmp_path: Path):
     assert payload_two["series"]["timestamps"] == payload_one["series"]["timestamps"]
     assert payload_two["series"]["weights"] == payload_one["series"]["weights"]
     assert payload_two["performance"] == payload_one["performance"]
+    data_split = payload_two["metadata"]["data_split"]
+    assert data_split == payload_one["metadata"]["data_split"]
+    test_start = date.fromisoformat(data_split["test_start"])
+    test_end = date.fromisoformat(data_split["test_end"])
+    for timestamp in payload_two["series"]["timestamps"]:
+        ts_date = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date()
+        assert test_start <= ts_date <= test_end
