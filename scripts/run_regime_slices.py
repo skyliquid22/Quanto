@@ -71,10 +71,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     slices_path = evaluation_dir / "regime_slices.json"
+    metadata = dict(result.metadata)
+    regime_metadata = regime_payload.get("metadata")
+    if isinstance(regime_metadata, Mapping):
+        metadata["regime"] = dict(regime_metadata)
     slices_path.write_text(
         json.dumps(
             {
-                "metadata": result.metadata,
+                "metadata": metadata,
                 "performance_by_regime": result.performance_by_regime,
             },
             indent=2,
