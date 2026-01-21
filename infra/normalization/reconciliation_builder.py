@@ -1260,6 +1260,18 @@ class ReconciliationBuilder:
             json.dump(manifest_payload, handle, indent=2, sort_keys=True)
         return manifest_payload
 
+    def _coerce_date(self, value: date | str | datetime, field: str) -> date:
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, str):
+            try:
+                return date.fromisoformat(value)
+            except ValueError as exc:  # pragma: no cover - defensive
+                raise ValueError(f"{field} must be YYYY-MM-DD text (got {value!r})") from exc
+        raise ValueError(f"{field} must be a date compatible value (got {value!r})")
+
 
 def _rolling_std(values: Sequence[float]) -> float:
     if len(values) < 2:
@@ -1357,19 +1369,6 @@ def _clip_price_anomalies(
                 record["high"] = mean_close
                 record["low"] = mean_close
                 record["close"] = mean_close
-
-    def _coerce_date(self, value: date | str | datetime, field: str) -> date:
-        if isinstance(value, date) and not isinstance(value, datetime):
-            return value
-        if isinstance(value, datetime):
-            return value.date()
-        if isinstance(value, str):
-            try:
-                return date.fromisoformat(value)
-            except ValueError as exc:  # pragma: no cover - defensive
-                raise ValueError(f"{field} must be YYYY-MM-DD text (got {value!r})") from exc
-        raise ValueError(f"{field} must be a date compatible value (got {value!r})")
-
 
 def _coerce_float(value: Any) -> float | None:
     if value is None:
