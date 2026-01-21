@@ -110,6 +110,7 @@ class ReconciliationBuilder:
         now: datetime | None = None,
     ) -> None:
         reconciliation_cfg = dict(config.get("reconciliation", config))
+        price_sanity_cfg = dict(reconciliation_cfg.get("price_sanity", {}))
         domain_cfg = reconciliation_cfg.get("domains")
         if domain_cfg is None:
             # Backwards compatible with configs that keep domains at top level.
@@ -129,6 +130,17 @@ class ReconciliationBuilder:
         self.default_allowed_statuses: Sequence[str] = tuple(
             reconciliation_cfg.get("allowed_validation_statuses", ["passed"])
         )
+        self.price_sanity = {
+            "enabled": bool(price_sanity_cfg.get("enabled", True)),
+            "strict": bool(price_sanity_cfg.get("strict", False)),
+            "max_return_sigma": float(price_sanity_cfg.get("max_return_sigma", 8.0)),
+            "min_abs_return": float(price_sanity_cfg.get("min_abs_return", 0.15)),
+            "median_jump": float(price_sanity_cfg.get("median_jump", 0.8)),
+            "detect_splits": bool(price_sanity_cfg.get("detect_splits", True)),
+            "action": str(price_sanity_cfg.get("action", "clip")).strip().lower(),
+        }
+        if self.price_sanity["action"] not in {"report", "fail", "drop", "clip"}:
+            raise ValueError("price_sanity.action must be one of: report, fail, drop, clip")
         self.raw_data_root = _resolve_runtime_root(Path(raw_data_root)) if raw_data_root else raw_root()
         self.canonical_root = _resolve_runtime_root(Path(canonical_root), layer="canonical") if canonical_root else get_data_root() / "canonical"
         self.validation_manifest_root = (
@@ -445,7 +457,7 @@ class ReconciliationBuilder:
                     if top_vol and sec_vol:
                         volume_diffs.append(abs(top_vol - sec_vol) / top_vol * 100.0)
 
-        self._enforce_equity_price_sanity(selected_records)
+        selected_records, price_sanity_report = self._enforce_equity_price_sanity(selected_records)
 
         metrics = DomainMetrics(domain=domain, run_id=run_id)
         total = len(selected_records)
@@ -469,6 +481,8 @@ class ReconciliationBuilder:
             "fallback_records": fallback_count,
             "manifest_paths": self._manifest_path_map(vendor_data),
         }
+        if price_sanity_report:
+            lineage_metadata["price_sanity"] = price_sanity_report
         return self._persist_manifest(
             domain=domain,
             run_id=run_id,
@@ -481,15 +495,24 @@ class ReconciliationBuilder:
             outputs=outputs,
             metrics=metrics_path,
             lineage_metadata=lineage_metadata,
+            price_sanity=price_sanity_report,
         )
 
     def _write_equity_outputs(self, records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         return self._write_equity_outputs_yearly(records)
 
-    def _enforce_equity_price_sanity(self, records: Sequence[Mapping[str, Any]]) -> None:
+    def _enforce_equity_price_sanity(
+        self,
+        records: Sequence[Mapping[str, Any]],
+    ) -> tuple[List[Mapping[str, Any]], Dict[str, Any] | None]:
         if not records:
-            return
+            return list(records), None
+        cfg = dict(self.price_sanity)
+        if not cfg.get("enabled", True):
+            return list(records), None
         violations: Dict[str, List[str]] = defaultdict(list)
+        violation_types: Dict[str, Dict[str, List[str]]] = defaultdict(lambda: defaultdict(list))
+        split_like: Dict[str, List[str]] = defaultdict(list)
         per_symbol: Dict[str, List[Mapping[str, Any]]] = defaultdict(list)
         for record in records:
             symbol = str(record.get("symbol") or "").upper()
@@ -505,12 +528,15 @@ class ReconciliationBuilder:
             close_value = _coerce_float(record.get("close"))
             if any(value is None or value <= 0 for value in (open_value, high_value, low_value, close_value)):
                 violations[symbol].append(timestamp)
+                violation_types["ohlc_invalid"][symbol].append(timestamp)
                 continue
             if high_value < max(open_value, close_value, low_value) or low_value > min(open_value, close_value):
                 violations[symbol].append(timestamp)
+                violation_types["ohlc_invalid"][symbol].append(timestamp)
                 continue
             if low_value > 0 and high_value / low_value > MAX_OHLC_RATIO:
                 violations[symbol].append(timestamp)
+                violation_types["ohlc_invalid"][symbol].append(timestamp)
                 continue
 
         for symbol, rows in per_symbol.items():
@@ -519,6 +545,8 @@ class ReconciliationBuilder:
                 key=lambda item: str(item.get("timestamp") or ""),
             )
             prev_close: float | None = None
+            returns_window: List[float] = []
+            close_window: List[float] = []
             for record in ordered:
                 timestamp = str(record.get("timestamp") or "")
                 close_value = _coerce_float(record.get("close"))
@@ -526,24 +554,58 @@ class ReconciliationBuilder:
                     prev_close = close_value
                     continue
                 if prev_close is not None and prev_close > 0:
-                    ratio = close_value / prev_close if prev_close else None
-                    if ratio and (ratio > MAX_DAILY_CLOSE_JUMP or ratio < 1.0 / MAX_DAILY_CLOSE_JUMP):
-                        violations[symbol].append(timestamp)
+                    ratio = close_value / prev_close
+                    if cfg.get("detect_splits", True) and _is_split_like(ratio):
+                        split_like[symbol].append(timestamp)
+                    else:
+                        log_return = math.log(ratio)
+                        returns_window.append(log_return)
+                        if len(returns_window) > 60:
+                            returns_window.pop(0)
+                        rolling_std = _rolling_std(returns_window)
+                        threshold = max(cfg["min_abs_return"], cfg["max_return_sigma"] * rolling_std)
+                        if abs(log_return) > threshold:
+                            violations[symbol].append(timestamp)
+                            violation_types["return_outlier"][symbol].append(timestamp)
+                close_window.append(float(close_value))
+                if len(close_window) > 20:
+                    close_window.pop(0)
                 prev_close = close_value
+                if close_window:
+                    mean_close = sum(close_window) / len(close_window)
+                    if mean_close > 0:
+                        if abs(close_value / mean_close - 1.0) > cfg["median_jump"]:
+                            violations[symbol].append(timestamp)
+                            violation_types["median_jump"][symbol].append(timestamp)
 
         if violations:
-            sample = {
-                symbol: {
-                    "count": len(timestamps),
-                    "min_ts": min(timestamps),
-                    "max_ts": max(timestamps),
-                }
-                for symbol, timestamps in violations.items()
-            }
-            raise ValueError(
-                "Equity price sanity gate failed; "
-                f"{sum(len(ts) for ts in violations.values())} record(s) invalid: {sample}"
+            report = _build_price_sanity_report(
+                violations=violations,
+                violation_types=violation_types,
+                split_like=split_like,
+                cfg=cfg,
             )
+            action = cfg["action"]
+            if cfg.get("strict") or action == "fail":
+                raise ValueError(
+                    "Equity price sanity gate failed; "
+                    f"{report.get('total_anomalies', 0)} record(s) flagged: {report.get('by_symbol', {})}"
+                )
+            if action == "drop":
+                filtered = [record for record in records if not _is_record_flagged(record, violations)]
+                return filtered, report
+            if action == "clip":
+                _clip_price_anomalies(records, violations)
+            return list(records), report
+        if split_like:
+            report = _build_price_sanity_report(
+                violations={},
+                violation_types={},
+                split_like=split_like,
+                cfg=cfg,
+            )
+            return list(records), report
+        return list(records), None
 
     def _write_equity_outputs_yearly(self, records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         grouped: MutableMapping[tuple[str, str], List[Mapping[str, Any]]] = defaultdict(list)
@@ -1162,6 +1224,7 @@ class ReconciliationBuilder:
         outputs: Sequence[Dict[str, Any]],
         metrics: str,
         lineage_metadata: Mapping[str, Any],
+        price_sanity: Mapping[str, Any] | None = None,
     ) -> Dict[str, Any]:
         manifest_dir = self.canonical_root / "manifests" / domain
         manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -1191,9 +1254,109 @@ class ReconciliationBuilder:
             "metrics_path": metrics,
             "lineage": lineage_payload,
         }
+        if price_sanity:
+            manifest_payload["price_sanity"] = dict(price_sanity)
         with manifest_path.open("w", encoding="utf-8") as handle:
             json.dump(manifest_payload, handle, indent=2, sort_keys=True)
         return manifest_payload
+
+
+def _rolling_std(values: Sequence[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return math.sqrt(variance)
+
+
+def _is_split_like(ratio: float) -> bool:
+    for multiple in (2, 3, 4, 5):
+        if abs(ratio - multiple) <= 0.05 * multiple:
+            return True
+        inverse = 1.0 / multiple
+        if abs(ratio - inverse) <= 0.05 * inverse:
+            return True
+    return False
+
+
+def _build_price_sanity_report(
+    *,
+    violations: Mapping[str, Sequence[str]],
+    violation_types: Mapping[str, Mapping[str, Sequence[str]]],
+    split_like: Mapping[str, Sequence[str]],
+    cfg: Mapping[str, Any],
+) -> Dict[str, Any]:
+    by_symbol = {
+        symbol: {
+            "count": len(timestamps),
+            "min_ts": min(timestamps),
+            "max_ts": max(timestamps),
+        }
+        for symbol, timestamps in violations.items()
+    }
+    by_type: Dict[str, Any] = {}
+    for anomaly_type, symbols in violation_types.items():
+        by_type[anomaly_type] = {
+            symbol: {
+                "count": len(timestamps),
+                "min_ts": min(timestamps),
+                "max_ts": max(timestamps),
+            }
+            for symbol, timestamps in symbols.items()
+        }
+    split_summary = {
+        symbol: {
+            "count": len(timestamps),
+            "min_ts": min(timestamps),
+            "max_ts": max(timestamps),
+        }
+        for symbol, timestamps in split_like.items()
+    }
+    return {
+        "action": cfg.get("action"),
+        "strict": cfg.get("strict"),
+        "total_anomalies": sum(len(ts) for ts in violations.values()),
+        "by_symbol": by_symbol,
+        "by_type": by_type,
+        "split_like": split_summary,
+    }
+
+
+def _is_record_flagged(record: Mapping[str, Any], violations: Mapping[str, Sequence[str]]) -> bool:
+    symbol = str(record.get("symbol") or "").upper()
+    timestamp = str(record.get("timestamp") or "")
+    return timestamp in set(violations.get(symbol, ()))
+
+
+def _clip_price_anomalies(
+    records: Sequence[Mapping[str, Any]],
+    violations: Mapping[str, Sequence[str]],
+) -> None:
+    if not violations:
+        return
+    per_symbol: Dict[str, List[Mapping[str, Any]]] = defaultdict(list)
+    for record in records:
+        symbol = str(record.get("symbol") or "").upper()
+        if symbol:
+            per_symbol[symbol].append(record)
+    for symbol, rows in per_symbol.items():
+        ordered = sorted(rows, key=lambda item: str(item.get("timestamp") or ""))
+        close_window: List[float] = []
+        for record in ordered:
+            timestamp = str(record.get("timestamp") or "")
+            close_value = _coerce_float(record.get("close"))
+            if close_value is not None and close_value > 0:
+                close_window.append(float(close_value))
+                if len(close_window) > 20:
+                    close_window.pop(0)
+            if timestamp not in violations.get(symbol, ()):
+                continue
+            if close_window:
+                mean_close = sum(close_window) / len(close_window)
+                record["open"] = mean_close
+                record["high"] = mean_close
+                record["low"] = mean_close
+                record["close"] = mean_close
 
     def _coerce_date(self, value: date | str | datetime, field: str) -> date:
         if isinstance(value, date) and not isinstance(value, datetime):
