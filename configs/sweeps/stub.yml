@@ -1,0 +1,43 @@
+sweep_name: stub_oos_split
+base_experiment_spec:
+  experiment_name: stub_oos_split
+  symbols: [
+      "AAPL", "MSFT", "NVDA"
+  ]
+  start_date: "2023-01-01"
+  end_date: "2023-12-31"
+  interval: "daily"
+  feature_set: "core_v1_regime"
+  regime_feature_set: "regime_v1"
+  policy: "ppo"
+  policy_params:
+    fast_window: 20
+    slow_window: 50
+    timesteps: 10000
+    n_steps: 2048
+    batch_size: 256
+    learning_rate: 0.0003
+    gamma: 0.99
+    reward_version: "reward_v1"
+  evaluation_split:
+    train_ratio: 0.8
+    test_ratio: 0.2
+    test_window_months: null
+  cost_config:
+    transaction_cost_bp: 1.0
+    slippage_bp: 0.0
+  risk_config:
+    long_only: true
+    max_weight: 0.6
+    exposure_cap: 1.0
+    min_cash: 0.0
+    max_turnover_1d: 0.4
+  seed: 42
+  notes: "Stub sweep spec showing evaluation_split metadata."
+sweep_dimensions:
+  policy_params.learning_rate:
+    - 0.0001
+    - 0.0003
+  policy_params.timesteps:
+    - 5000
+    - 10000
