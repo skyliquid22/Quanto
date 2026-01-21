@@ -133,9 +133,9 @@ class ReconciliationBuilder:
         self.price_sanity = {
             "enabled": bool(price_sanity_cfg.get("enabled", True)),
             "strict": bool(price_sanity_cfg.get("strict", False)),
-            "max_return_sigma": float(price_sanity_cfg.get("max_return_sigma", 8.0)),
-            "min_abs_return": float(price_sanity_cfg.get("min_abs_return", 0.15)),
-            "median_jump": float(price_sanity_cfg.get("median_jump", 0.8)),
+            "max_return_sigma": float(price_sanity_cfg.get("max_return_sigma", 24.0)),
+            "min_abs_return": float(price_sanity_cfg.get("min_abs_return", 0.45)),
+            "median_jump": float(price_sanity_cfg.get("median_jump", 2.4)),
             "detect_splits": bool(price_sanity_cfg.get("detect_splits", True)),
             "action": str(price_sanity_cfg.get("action", "clip")).strip().lower(),
         }
