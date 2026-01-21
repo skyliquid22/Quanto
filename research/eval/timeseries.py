@@ -109,6 +109,7 @@ def _extract_regime_series(series: Mapping[str, Any]) -> Dict[str, Any] | None:
         return None
     feature_names = raw_regime.get("feature_names") or []
     values = raw_regime.get("series") or raw_regime.get("values") or []
+    metadata = raw_regime.get("metadata")
     if not feature_names or not values:
         return None
     feature_names = [str(name) for name in feature_names]
@@ -121,7 +122,10 @@ def _extract_regime_series(series: Mapping[str, Any]) -> Dict[str, Any] | None:
         normalized.append([float(row[idx]) for idx in range(expected)])
     if not normalized:
         return None
-    return {"feature_names": feature_names, "series": normalized}
+    payload: Dict[str, Any] = {"feature_names": feature_names, "series": normalized}
+    if isinstance(metadata, Mapping):
+        payload["metadata"] = dict(metadata)
+    return payload
 
 
 def _round(value: float, precision: int) -> float:

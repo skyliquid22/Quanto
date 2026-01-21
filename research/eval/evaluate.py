@@ -32,6 +32,7 @@ class EvaluationMetadata:
     run_id: str
     policy_details: Mapping[str, Any] | None = None
     data_split: Mapping[str, Any] | None = None
+    regime_metadata: Mapping[str, Any] | None = None
 
 
 def evaluation_payload(
@@ -56,12 +57,15 @@ def evaluation_payload(
         timestamps=series.timestamps,
     )
     metadata_section = _metadata_section(metadata, series.rollout_metadata)
+    series_section = _series_section(series, metrics)
+    if metadata.regime_metadata and isinstance(series_section.get("regime"), dict):
+        series_section["regime"]["metadata"] = dict(metadata.regime_metadata)
     payload = {
         "metadata": metadata_section,
         "performance": metrics.performance,
         "trading": metrics.trading,
         "safety": metrics.safety,
-        "series": _series_section(series, metrics),
+        "series": series_section,
         "inputs_used": dict(sorted((inputs_used or {}).items())),
         "config": {
             "evaluation": {
@@ -121,6 +125,8 @@ def _metadata_section(metadata: EvaluationMetadata, rollout_metadata: Mapping[st
         payload["policy"] = dict(metadata.policy_details)
     if metadata.data_split:
         payload["data_split"] = dict(metadata.data_split)
+    if metadata.regime_metadata:
+        payload["regime"] = dict(metadata.regime_metadata)
     if rollout_metadata:
         payload["rollout"] = dict(rollout_metadata)
     return payload
