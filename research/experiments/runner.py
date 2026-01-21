@@ -21,7 +21,11 @@ from research.experiments.ablation import SweepExperiment, SweepResult
 from research.experiments.registry import ExperimentPaths, ExperimentRegistry
 from research.experiments.spec import ExperimentSpec
 from research.experiments.sweep import SweepSpec, expand_sweep_entries
-from research.features.feature_eng import build_sma_feature_result, build_universe_feature_results
+from research.features.feature_eng import (
+    build_sma_feature_result,
+    build_universe_feature_results,
+    resolve_regime_metadata,
+)
 from research.features.feature_registry import (
     build_universe_feature_panel,
     default_regime_for_feature_set,
@@ -370,6 +374,9 @@ def _run_hierarchical_evaluation(
         feature_set_name,
         sma_config,
     ) = _build_hierarchical_rows(spec, slices, data_root)
+    normalized_feature_set = normalize_feature_set_name(spec.feature_set)
+    regime_for_panel = spec.regime_feature_set or default_regime_for_feature_set(normalized_feature_set)
+    regime_metadata = resolve_regime_metadata(regime_for_panel)
     rows = _slice_rows_by_date(rows, data_split.test_start, data_split.test_end)
     if len(rows) < 2:
         raise ValueError("Not enough aligned feature rows in the test window for hierarchical evaluation.")
@@ -410,6 +417,7 @@ def _run_hierarchical_evaluation(
             ordered_inputs,
             policy_signature,
         ),
+        regime_metadata=regime_metadata,
         policy_details={
             "type": "hierarchical",
             "controller": controller_cfg.to_dict(),
@@ -531,6 +539,7 @@ def _build_hierarchical_rows(
         calendar=calendar,
         forward_fill_limit=3,
         regime_feature_set=regime_for_panel,
+        data_root=data_root,
     )
     return panel.rows, panel.observation_columns, feature_hashes, feature_set_name, sma_config
 
