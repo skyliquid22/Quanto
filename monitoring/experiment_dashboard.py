@@ -127,6 +127,9 @@ def _extract_reward_version(spec_payload: Mapping[str, Any] | None) -> str | Non
     if isinstance(policy_params, Mapping):
         value = policy_params.get("reward_version")
         return str(value) if value else None
+    policy = spec_payload.get("policy")
+    if str(policy).strip().lower() == "ppo":
+        return "reward_v1"
     return None
 
 
