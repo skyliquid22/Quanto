@@ -113,6 +113,7 @@ class ReplayMarketDataSource(MarketDataSource):
             calendar=calendar,
             forward_fill_limit=3,
             regime_feature_set=regime_for_panel,
+            data_root=self._data_root,
         )
         self._symbol_order = tuple(panel.symbol_order)
         self._observation_columns = tuple(panel.observation_columns)
