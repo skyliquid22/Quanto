@@ -14,6 +14,7 @@ data/processed/
 data/features/
 logs/
 .models/
+monitoring/metrics/
 _cleanup_stash/
 /*.md
 !/README.md
