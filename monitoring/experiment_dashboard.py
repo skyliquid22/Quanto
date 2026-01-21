@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import json
 import math
 import os
@@ -16,6 +18,10 @@ try:
     import streamlit as st
 except ModuleNotFoundError:  # pragma: no cover - optional for tests
     st = None  # type: ignore[assignment]
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from infra.paths import get_data_root
 
@@ -249,6 +255,13 @@ def _format_symbols(spec_payload: Mapping[str, Any] | None) -> str:
     return ", ".join(str(symbol) for symbol in symbols[:10]) + (" ..." if len(symbols) > 10 else "")
 
 
+def _format_float(value: Any) -> str:
+    number = _coerce_float(value)
+    if number is None:
+        return "n/a"
+    return f"{number:.6f}"
+
+
 def main() -> None:
     if st is None:  # pragma: no cover - runtime dependency
         raise SystemExit("Streamlit is required. Install with: pip install streamlit")
@@ -294,10 +307,27 @@ def main() -> None:
         filtered = filtered[filtered["qualification_passed"] == True]  # noqa: E712
 
     st.subheader("Experiments")
-    st.dataframe(filtered, use_container_width=True, hide_index=True)
+    display_df = filtered.copy()
+    float_cols = display_df.select_dtypes(include=["float"]).columns
+    if len(float_cols) > 0:
+        display_df[float_cols] = display_df[float_cols].round(6)
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    label_map = {}
+    for row in filtered.to_dict("records"):
+        exp_id = row.get("experiment_id")
+        if not exp_id:
+            continue
+        name = row.get("experiment_name") or "unknown"
+        label_map[exp_id] = f"{name} [{str(exp_id)[:6]}...]"
 
     experiment_ids = filtered["experiment_id"].tolist()
-    selected_id = st.selectbox("Select experiment", experiment_ids, index=0)
+    selected_id = st.selectbox(
+        "Select experiment",
+        experiment_ids,
+        index=0,
+        format_func=lambda exp_id: label_map.get(exp_id, exp_id),
+    )
     exp_dir = registry_root / selected_id
     spec_payload = read_json(exp_dir / "spec" / "experiment_spec.json") or {}
     metrics_payload = read_json(exp_dir / "evaluation" / "metrics.json") or {}
@@ -306,20 +336,22 @@ def main() -> None:
     shadow_path, shadow_payload = _latest_shadow_metrics(data_root, selected_id)
 
     st.subheader("Selected Experiment")
+    st.metric("Experiment ID", selected_id)
+
     summary_cols = st.columns(3)
-    summary_cols[0].metric("Experiment ID", selected_id)
+    summary_cols[0].metric("Expierment name", spec_payload.get("experiment_name") or "unknown")
     summary_cols[1].metric("Feature set", spec_payload.get("feature_set") or "unknown")
     summary_cols[2].metric("Policy", spec_payload.get("policy") or "unknown")
 
     detail_cols = st.columns(3)
-    detail_cols[0].metric("Sharpe", _coerce_float(_get_nested(metrics_payload, "performance.sharpe")))
-    detail_cols[1].metric("Total Return", _coerce_float(_get_nested(metrics_payload, "performance.total_return")))
-    detail_cols[2].metric("Max Drawdown", _coerce_float(_get_nested(metrics_payload, "performance.max_drawdown")))
+    detail_cols[0].metric("Sharpe", _format_float(_get_nested(metrics_payload, "performance.sharpe")))
+    detail_cols[1].metric("Total Return", _format_float(_get_nested(metrics_payload, "performance.total_return")))
+    detail_cols[2].metric("Max Drawdown", _format_float(_get_nested(metrics_payload, "performance.max_drawdown")))
 
     detail_cols = st.columns(3)
-    detail_cols[0].metric("Turnover 1D Mean", _coerce_float(_get_nested(metrics_payload, "trading.turnover_1d_mean")))
-    detail_cols[1].metric("Avg Exposure", _coerce_float(_get_nested(metrics_payload, "trading.avg_exposure")))
-    detail_cols[2].metric("Tx Cost (bps)", _coerce_float(_get_nested(metrics_payload, "trading.tx_cost_bps")))
+    detail_cols[0].metric("Turnover 1D Mean", _format_float(_get_nested(metrics_payload, "trading.turnover_1d_mean")))
+    detail_cols[1].metric("Avg Exposure", _format_float(_get_nested(metrics_payload, "trading.avg_exposure")))
+    detail_cols[2].metric("Tx Cost (bps)", _format_float(_get_nested(metrics_payload, "trading.tx_cost_bps")))
 
     with st.expander("Spec and Metadata", expanded=False):
         st.write(f"Symbols: {_format_symbols(spec_payload)}")
@@ -333,7 +365,7 @@ def main() -> None:
         if regime_table is None:
             st.info("No regime slices found for this experiment.")
         else:
-            st.dataframe(regime_table, use_container_width=True)
+            st.dataframe(regime_table.round(6), use_container_width=True)
             plot_metrics = [col for col in ("sharpe", "total_return", "max_drawdown") if col in regime_table.columns]
             if plot_metrics:
                 st.bar_chart(regime_table[plot_metrics])
@@ -353,16 +385,18 @@ def main() -> None:
         else:
             st.write(f"Latest shadow metrics: {shadow_path}")
             shadow_cols = st.columns(3)
-            shadow_cols[0].metric("Sharpe", _coerce_float(_get_nested(shadow_payload, "performance.sharpe")))
-            shadow_cols[1].metric("Total Return", _coerce_float(_get_nested(shadow_payload, "performance.total_return")))
-            shadow_cols[2].metric("Max Drawdown", _coerce_float(_get_nested(shadow_payload, "performance.max_drawdown")))
+            shadow_cols[0].metric("Sharpe", _format_float(_get_nested(shadow_payload, "performance.sharpe")))
+            shadow_cols[1].metric("Total Return", _format_float(_get_nested(shadow_payload, "performance.total_return")))
+            shadow_cols[2].metric("Max Drawdown", _format_float(_get_nested(shadow_payload, "performance.max_drawdown")))
             st.json(shadow_payload.get("performance", {}))
 
     with tabs[3]:
+        baseline_ids = [""] + [exp_id for exp_id in df["experiment_id"].tolist() if exp_id != selected_id]
         baseline_id = st.selectbox(
             "Baseline experiment",
-            [""] + [exp_id for exp_id in df["experiment_id"].tolist() if exp_id != selected_id],
+            baseline_ids,
             index=0,
+            format_func=lambda exp_id: "" if exp_id == "" else label_map.get(exp_id, exp_id),
         )
         if baseline_id:
             baseline_dir = registry_root / baseline_id
@@ -376,6 +410,7 @@ def main() -> None:
                 ("Tx Cost (bps)", "trading.tx_cost_bps"),
             ]
             compare_table = _compare_metrics(metrics_payload, baseline_metrics, metric_paths)
+            compare_table = compare_table.round(6)
             st.dataframe(compare_table, use_container_width=True, hide_index=True)
         else:
             st.info("Select a baseline experiment to compare.")
