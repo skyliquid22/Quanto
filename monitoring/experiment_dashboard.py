@@ -265,6 +265,23 @@ def _format_float(value: Any) -> str:
     return f"{number:.6f}"
 
 
+def _format_date_range(start: Any, end: Any) -> str:
+    if not start or not end:
+        return "n/a"
+    return f"{start} → {end}"
+
+
+def _extract_data_split(payload: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if not payload:
+        return {}
+    metadata = payload.get("metadata")
+    if isinstance(metadata, Mapping):
+        data_split = metadata.get("data_split")
+        if isinstance(data_split, Mapping):
+            return data_split
+    return {}
+
+
 def main() -> None:
     if st is None:  # pragma: no cover - runtime dependency
         raise SystemExit("Streamlit is required. Install with: pip install streamlit")
@@ -274,7 +291,7 @@ def main() -> None:
     default_root = get_data_root()
     data_root_input = st.sidebar.text_input("Data root", str(default_root))
     data_root = Path(data_root_input).expanduser()
-    registry_root = Path(st.sidebar.text_input("Experiments root", str(data_root / "experiments"))).expanduser()
+    registry_root = Path(st.sidebar.text_input("Experiments root", str(data_root / "experiments_legacy"))).expanduser()
 
     if st.sidebar.button("Refresh data"):
         st.cache_data.clear()
@@ -356,8 +373,26 @@ def main() -> None:
     detail_cols[1].metric("Avg Exposure", _format_float(_get_nested(metrics_payload, "trading.avg_exposure")))
     detail_cols[2].metric("Tx Cost (bps)", _format_float(_get_nested(metrics_payload, "trading.tx_cost_bps")))
 
+    data_split = _extract_data_split(metrics_payload)
+    split_cols = st.columns(3)
+    split_cols[0].metric(
+        "Train Window",
+        _format_date_range(data_split.get("train_start"), data_split.get("train_end")),
+    )
+    split_cols[1].metric(
+        "Test Window",
+        _format_date_range(data_split.get("test_start"), data_split.get("test_end")),
+    )
+    split_cols[2].metric(
+        "Split Ratio",
+        _format_float(data_split.get("train_ratio")) + " / " + _format_float(data_split.get("test_ratio")),
+    )
+
     with st.expander("Spec and Metadata", expanded=False):
         st.write(f"Symbols: {_format_symbols(spec_payload)}")
+        if data_split:
+            st.write("OOS Split:")
+            st.json(data_split)
         st.json(spec_payload)
 
     tabs = st.tabs(["Regime Slices", "Qualification", "Shadow Metrics", "Compare"])
