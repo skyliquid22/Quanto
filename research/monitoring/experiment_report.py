@@ -96,6 +96,51 @@ def load_baseline_artifacts(
     )
 
 
+def _is_sma_metadata(metadata: Mapping[str, Any]) -> bool:
+    feature_set = str(metadata.get("feature_set") or "").strip().lower()
+    if feature_set != "sma_v1":
+        return False
+    policy_id = metadata.get("policy_id")
+    if isinstance(policy_id, str) and "sma" in policy_id.lower():
+        return True
+    policy = metadata.get("policy")
+    if isinstance(policy, Mapping) and policy.get("type") == "sma_weight":
+        return True
+    if isinstance(policy, str) and "sma" in policy.lower():
+        return True
+    return False
+
+
+def resolve_default_baseline(
+    *,
+    data_root: Optional[Path] = None,
+    exclude_id: str | None = None,
+) -> str | None:
+    base = Path(data_root) if data_root else get_data_root()
+    experiments_dir = base / "experiments"
+    if not experiments_dir.exists():
+        return None
+    candidates = sorted(
+        [path for path in experiments_dir.iterdir() if path.is_dir()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for entry in candidates:
+        if exclude_id and entry.name == exclude_id:
+            continue
+        metrics_path = entry / "evaluation" / "metrics.json"
+        if not metrics_path.exists():
+            continue
+        try:
+            payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        metadata = payload.get("metadata")
+        if isinstance(metadata, Mapping) and _is_sma_metadata(metadata):
+            return entry.name
+    return None
+
+
 def extract_metrics(payload: Mapping[str, Any]) -> Dict[str, Any]:
     metrics = payload.get("performance")
     if isinstance(metrics, Mapping):
@@ -158,8 +203,8 @@ def build_comparison_table(
         rows.append(
             {
                 "metric": key,
-                "candidate": cand,
-                "baseline": base,
+                "candidate": _format_value(cand),
+                "baseline": _format_value(base),
                 "delta": delta,
                 "delta_pct": delta_pct,
             }
@@ -167,9 +212,67 @@ def build_comparison_table(
     df = pd.DataFrame(rows)
     if df.empty:
         return df
-    for col in ("candidate", "baseline", "delta", "delta_pct"):
+    for col in ("delta", "delta_pct"):
         df[col] = df[col].map(_format_value)
     return df
+
+
+def build_winner_table(
+    candidate_metrics: Mapping[str, Any],
+    baseline_metrics: Mapping[str, Any],
+) -> pd.DataFrame:
+    keys = sorted(set(candidate_metrics) & set(baseline_metrics))
+    rows = []
+    for key in keys:
+        cand = candidate_metrics.get(key)
+        base = baseline_metrics.get(key)
+        cand_win = ""
+        base_win = ""
+        if isinstance(cand, (int, float)) and isinstance(base, (int, float)) and cand != base:
+            lower_better = _metric_prefers_lower(key)
+            base_den = abs(base)
+            if base_den > 0:
+                if lower_better:
+                    cand_improve = (base - cand) / base_den
+                    base_improve = (cand - base) / base_den
+                else:
+                    cand_improve = (cand - base) / base_den
+                    base_improve = (base - cand) / base_den
+                cand_win = _tick_marks(cand_improve)
+                base_win = _tick_marks(base_improve)
+        rows.append(
+            {
+                "metric": key,
+                "candidate": cand_win,
+                "baseline": base_win,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _metric_prefers_lower(name: str) -> bool:
+    lowered = str(name or "").lower()
+    if lowered in {
+        "max_drawdown",
+        "volatility_ann",
+        "turnover_1d_mean",
+        "turnover",
+        "tx_cost_bps",
+        "tx_cost_total",
+    }:
+        return True
+    for token in ("drawdown", "volatility", "turnover", "cost", "fee", "slippage"):
+        if token in lowered:
+            return True
+    return False
+
+
+def _tick_marks(improvement: float | None) -> str:
+    if improvement is None or improvement <= 0:
+        return ""
+    thresholds = (0.2, 0.4, 0.6, 0.8, 1.0)
+    ticks = sum(1 for threshold in thresholds if improvement >= threshold)
+    return "✓" * max(1, ticks)
 
 
 def resolve_total_return(metrics: Mapping[str, Any]) -> float | None:
@@ -211,6 +314,60 @@ def resolve_timestamps(series: Mapping[str, Any]) -> Sequence[Any]:
     return []
 
 
+def _resolve_datetime_index(timestamps: Sequence[Any]) -> Sequence[Any]:
+    if timestamps is None or len(timestamps) == 0:
+        return []
+    parsed = pd.to_datetime(list(timestamps), errors="coerce", utc=True)
+    if parsed.notna().any():
+        return parsed
+    return list(range(len(timestamps)))
+
+
+def _plot_series_with_stats(
+    ax,
+    x,
+    y,
+    *,
+    label: str,
+    color: str | None = None,
+    rolling_window: int = 20,
+    label_stats: bool = True,
+    include_stats: bool = True,
+) -> None:
+    if x is None or y is None:
+        return
+    if len(x) == 0 or len(y) == 0:
+        return
+    values = [float(entry) for entry in y]
+    ax.plot(x, values, label=label, linewidth=2.0, color=color)
+    if not values:
+        return
+    max_value = max(values)
+    min_value = min(values)
+    if include_stats:
+        rolling = pd.Series(values).rolling(window=rolling_window, min_periods=1).mean().tolist()
+        mean_label = f"{rolling_window}d mean" if label_stats else "_nolegend_"
+        max_label = "max" if label_stats else "_nolegend_"
+        min_label = "min" if label_stats else "_nolegend_"
+        ax.plot(
+            x,
+            rolling,
+            label=mean_label,
+            linestyle="--",
+            linewidth=1.4,
+            alpha=0.75,
+            color="#6e6e6e",
+        )
+        ax.axhline(max_value, linestyle=":", linewidth=1.0, alpha=0.5, color="#9a9a9a", label=max_label)
+        ax.axhline(min_value, linestyle=":", linewidth=1.0, alpha=0.5, color="#9a9a9a", label=min_label)
+        max_idx = values.index(max_value)
+        min_idx = values.index(min_value)
+        ax.scatter([x[max_idx]], [max_value], s=26, color="#6e6e6e", zorder=3)
+        ax.scatter([x[min_idx]], [min_value], s=26, color="#6e6e6e", zorder=3)
+        ax.text(x[max_idx], max_value, f" max {max_value:.4f}", fontsize=8, ha="left", va="bottom")
+        ax.text(x[min_idx], min_value, f" min {min_value:.4f}", fontsize=8, ha="left", va="top")
+
+
 def is_notebook() -> bool:
     try:
         from IPython import get_ipython  # type: ignore
@@ -235,11 +392,41 @@ def summarize_metadata(metadata: Mapping[str, Any]) -> Dict[str, str]:
     return summary
 
 
-def format_table(df: pd.DataFrame) -> str:
-    if df.empty:
+def _ascii_table(rows: Sequence[Mapping[str, Any]], columns: Sequence[str]) -> str:
+    if not rows:
         return "No metrics available."
-    with pd.option_context("display.max_rows", 200, "display.max_colwidth", 80):
-        return df.to_string(index=False)
+    rendered_rows = []
+    for row in rows:
+        rendered_rows.append({col: _format_value(row.get(col)) for col in columns})
+    widths = {col: len(col) for col in columns}
+    for row in rendered_rows:
+        for col in columns:
+            widths[col] = max(widths[col], len(str(row.get(col, ""))))
+    sep = "+-" + "-+-".join("-" * widths[col] for col in columns) + "-+"
+    header = "| " + " | ".join(col.ljust(widths[col]) for col in columns) + " |"
+    lines = [sep, header, sep]
+    for row in rendered_rows:
+        line = "| " + " | ".join(str(row.get(col, "")).ljust(widths[col]) for col in columns) + " |"
+        lines.append(line)
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def format_table(table: pd.DataFrame | Sequence[Mapping[str, Any]] | None) -> str:
+    if table is None:
+        return "No metrics available."
+    if isinstance(table, pd.DataFrame):
+        if table.empty:
+            return "No metrics available."
+        rows = table.to_dict("records")
+        columns = list(table.columns)
+        return _ascii_table(rows, columns)
+    if isinstance(table, Sequence) and table:
+        first = table[0]
+        if isinstance(first, Mapping):
+            columns = list(first.keys())
+            return _ascii_table(table, columns)
+    return "No metrics available."
 
 
 def ensure_output_dir(path: Path) -> Path:
@@ -252,13 +439,32 @@ def render_account_value_plot(
     *,
     label: str,
     ax,
+    color: str | None = None,
+    label_stats: bool = True,
+    include_stats: bool = True,
 ) -> None:
-    timestamps = resolve_timestamps(series)
+    timestamps = _resolve_datetime_index(resolve_timestamps(series))
     values = series.get("account_value")
-    if not isinstance(values, Sequence) or not timestamps:
+    if not isinstance(values, Sequence):
         return
-    ax.plot(timestamps, values, label=label, linewidth=2.0)
+    if timestamps is None or len(timestamps) == 0:
+        return
+    y_values = list(values)
+    if len(y_values) == 0:
+        return
+    window = max(5, min(20, len(y_values) // 4 or 5))
+    _plot_series_with_stats(
+        ax,
+        list(timestamps),
+        y_values,
+        label=label,
+        color=color,
+        rolling_window=window,
+        label_stats=label_stats,
+        include_stats=include_stats,
+    )
     ax.set_title("Account Value")
+    ax.set_xlabel("Date")
     ax.set_ylabel("Value")
     ax.grid(True, alpha=0.2)
 
@@ -268,23 +474,53 @@ def render_turnover_plot(
     *,
     label: str,
     ax,
+    color: str | None = None,
+    label_stats: bool = True,
+    include_stats: bool = True,
 ) -> None:
     turnover = series.get("turnover_1d")
     if not turnover:
         turnover = derive_turnover_series(series.get("weights"))
-    if not turnover:
+    if turnover is None:
         return
-    x = list(range(len(turnover)))
-    ax.plot(x, turnover, label=label, linewidth=1.5)
+    y_values = list(turnover)
+    if len(y_values) == 0:
+        return
+    timestamps = _resolve_datetime_index(resolve_timestamps(series))
+    if timestamps is not None and len(timestamps) > 0:
+        x = list(timestamps)[1 : len(y_values) + 1]
+    else:
+        x = list(range(len(y_values)))
+    window = max(5, min(20, len(y_values) // 4 or 5))
+    _plot_series_with_stats(
+        ax,
+        x,
+        y_values,
+        label=label,
+        color=color,
+        rolling_window=window,
+        label_stats=label_stats,
+        include_stats=include_stats,
+    )
     ax.set_title("Turnover (1d)")
+    ax.set_xlabel("Date")
     ax.set_ylabel("Turnover")
     ax.grid(True, alpha=0.2)
 
 
-def render_total_return_bar(candidate: float | None, baseline: float | None, ax) -> None:
-    labels = ["candidate", "baseline"]
+def render_total_return_bar(
+    candidate: float | None,
+    baseline: float | None,
+    ax,
+    *,
+    candidate_label: str,
+    baseline_label: str,
+    candidate_color: str,
+    baseline_color: str,
+) -> None:
+    labels = [candidate_label, baseline_label]
     values = [candidate, baseline]
-    ax.bar(labels, [value or 0.0 for value in values], color=["#1f77b4", "#ff7f0e"])
+    ax.bar(labels, [value or 0.0 for value in values], color=[candidate_color, baseline_color])
     ax.set_title("Total Return")
     ax.set_ylabel("Total Return")
     ax.grid(True, axis="y", alpha=0.2)
@@ -307,15 +543,24 @@ def generate_experiment_report(
 
     baseline_artifacts = None
     comparison_table = pd.DataFrame()
+    winner_table = pd.DataFrame()
     baseline_metrics = {}
     baseline_series = {}
+    candidate_label = f"candidate ({experiment_id[:6]})"
+    baseline_label = "baseline"
+    baseline_id = None
     if artifacts.qualification and artifacts.qualification.get("baseline_experiment_id"):
         baseline_id = str(artifacts.qualification.get("baseline_experiment_id"))
+    if not baseline_id:
+        baseline_id = resolve_default_baseline(data_root=data_root, exclude_id=experiment_id)
+    if baseline_id:
         baseline_artifacts = load_baseline_artifacts(baseline_id, data_root=data_root, strict=strict)
         if baseline_artifacts:
+            baseline_label = f"baseline ({baseline_artifacts.experiment_id[:6]})"
             baseline_metrics = extract_metrics(baseline_artifacts.metrics)
             baseline_series = extract_series(baseline_artifacts.metrics, baseline_artifacts.rollout)
             comparison_table = build_comparison_table(metrics, baseline_metrics)
+            winner_table = build_winner_table(metrics, baseline_metrics)
 
     inline_mode = inline if inline is not None else is_notebook()
     output_dir = Path(output_dir) if output_dir else get_data_root() / "monitoring" / "plots" / experiment_id
@@ -327,17 +572,43 @@ def generate_experiment_report(
     try:
         import matplotlib.pyplot as plt  # type: ignore
         try:
-            plt.style.use("seaborn-v0_8")
+            import seaborn as sns  # type: ignore
+
+            sns.set_theme(style="whitegrid", palette="Set2")
         except Exception:
-            pass
+            try:
+                plt.style.use("seaborn-v0_8")
+            except Exception:
+                pass
 
         if metrics_table.empty:
             pass
         fig, ax = plt.subplots(figsize=(10, 4))
-        render_account_value_plot(series, label="candidate", ax=ax)
+        render_account_value_plot(
+            series,
+            label=candidate_label,
+            ax=ax,
+            color="#1b9e77",
+            label_stats=True,
+            include_stats=True,
+        )
         if baseline_series:
-            render_account_value_plot(baseline_series, label="baseline", ax=ax)
+            render_account_value_plot(
+                baseline_series,
+                label=baseline_label,
+                ax=ax,
+                color="#d95f02",
+                label_stats=False,
+                include_stats=False,
+            )
         ax.legend(loc="best")
+        try:
+            import matplotlib.dates as mdates  # type: ignore
+
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+            ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax.xaxis.get_major_locator()))
+        except Exception:
+            pass
         if inline_mode:
             plt.show()
         else:
@@ -348,10 +619,31 @@ def generate_experiment_report(
         plt.close(fig)
 
         fig, ax = plt.subplots(figsize=(10, 3.5))
-        render_turnover_plot(series, label="candidate", ax=ax)
+        render_turnover_plot(
+            series,
+            label=candidate_label,
+            ax=ax,
+            color="#1b9e77",
+            label_stats=True,
+            include_stats=True,
+        )
         if baseline_series:
-            render_turnover_plot(baseline_series, label="baseline", ax=ax)
+            render_turnover_plot(
+                baseline_series,
+                label=baseline_label,
+                ax=ax,
+                color="#d95f02",
+                label_stats=False,
+                include_stats=False,
+            )
         ax.legend(loc="best")
+        try:
+            import matplotlib.dates as mdates  # type: ignore
+
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+            ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax.xaxis.get_major_locator()))
+        except Exception:
+            pass
         if inline_mode:
             plt.show()
         else:
@@ -367,6 +659,10 @@ def generate_experiment_report(
                 resolve_total_return(metrics),
                 resolve_total_return(baseline_metrics),
                 ax,
+                candidate_label=candidate_label,
+                baseline_label=baseline_label,
+                candidate_color="#1b9e77",
+                baseline_color="#d95f02",
             )
             if inline_mode:
                 plt.show()
@@ -385,6 +681,7 @@ def generate_experiment_report(
         "metadata": summarize_metadata(metadata),
         "metrics_table": metrics_table,
         "comparison_table": comparison_table,
+        "winner_table": winner_table,
         "figures": figures,
         "baseline_experiment_id": baseline_artifacts.experiment_id if baseline_artifacts else None,
         "output_dir": output_dir,

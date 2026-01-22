@@ -31,8 +31,8 @@ def main() -> int:
 
     metadata = report.get("metadata") or {}
     print("Experiment Summary")
-    for key, value in metadata.items():
-        print(f"- {key}: {value}")
+    summary_rows = [{"field": key, "value": value} for key, value in metadata.items()]
+    print(format_table(summary_rows))
 
     print("\nMetrics")
     print(format_table(report.get("metrics_table")))
@@ -41,6 +41,10 @@ def main() -> int:
     if comparison is not None and not comparison.empty:
         print("\nBaseline Comparison")
         print(format_table(comparison))
+
+    winner_table = report.get("winner_table")
+    if winner_table is not None and not winner_table.empty:
+        print("\n" + format_table(winner_table))
 
     figures = report.get("figures") or {}
     if figures:
