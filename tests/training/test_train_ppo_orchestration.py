@@ -56,12 +56,18 @@ def _make_args(tmp_path, **overrides):
 
 def _patch_common_dependencies(monkeypatch: pytest.MonkeyPatch, tmp_path, *, manifest):
     def fake_load(symbols, start, end, data_root=None, interval="daily"):
-        slice_data = SimpleNamespace(
-            rows=[{"timestamp": datetime(2023, 1, 2, tzinfo=UTC)}],
-            timestamps=[datetime(2023, 1, 2, tzinfo=UTC), datetime(2023, 1, 3, tzinfo=UTC)],
-            closes=[100.0, 101.0],
-        )
-        return {symbols[0]: slice_data}, {"canonical/equity_ohlcv/AAPL/daily/2023.parquet": "sha256:deadbeef"}
+        entries = {}
+        hashes = {}
+        for symbol in symbols:
+            slice_data = SimpleNamespace(
+                rows=[{"timestamp": datetime(2023, 1, 2, tzinfo=UTC)}],
+                timestamps=[datetime(2023, 1, 2, tzinfo=UTC), datetime(2023, 1, 3, tzinfo=UTC)],
+                closes=[100.0, 101.0],
+                symbol=symbol,
+            )
+            entries[symbol] = slice_data
+            hashes[f"canonical/equity_ohlcv/{symbol}/daily/2023.parquet"] = "sha256:deadbeef"
+        return entries, hashes
 
     sample_rows = [
         {
