@@ -857,34 +857,37 @@ class ReconciliationBuilder:
         end: date,
     ) -> Dict[str, VendorSnapshot]:
         snapshots: Dict[str, VendorSnapshot] = {}
-        manifests = self._load_manifests("fundamentals")
+        manifests = {**self._load_manifests("fundamentals"), **self._load_manifests("financial_statements")}
         for vendor in vendor_priority:
             manifest = manifests.get(vendor)
             if not manifest:
                 continue
-            vendor_root = self.raw_data_root / vendor / "fundamentals"
-            if not vendor_root.exists():
-                continue
             files: List[Dict[str, Any]] = []
             records: Dict[tuple[str, str, str], List[Dict[str, Any]]] = defaultdict(list)
-            for file_path in vendor_root.glob("*/*/*/*.parquet"):
-                partition_day = self._parse_simple_partition(file_path)
-                if not partition_day or not (start <= partition_day <= end):
+            for domain_dir in ("fundamentals", "financial_statements"):
+                vendor_root = self.raw_data_root / vendor / domain_dir
+                if not vendor_root.exists():
                     continue
-                symbol = file_path.parents[3].name
-                raw_records = self._read_records(file_path)
-                file_hash = compute_file_hash(file_path)
-                files.append({"path": str(file_path), "file_hash": file_hash, "records": len(raw_records)})
-                for row in raw_records:
-                    normalized = dict(row)
-                    normalized["symbol"] = str(normalized.get("symbol") or symbol)
-                    normalized["report_date"] = self._normalize_date(normalized.get("report_date"))
-                    normalized["filing_date"] = self._normalize_date(normalized.get("filing_date"))
-                    normalized["source_vendor"] = vendor
-                    normalized["__input_file_hash"] = file_hash
-                    statement = str(normalized.get("statement_type") or "")
-                    key = (normalized["symbol"], normalized["report_date"], statement)
-                    records[key].append(normalized)
+                for file_path in vendor_root.glob("*/*/*/*.parquet"):
+                    partition_day = self._parse_simple_partition(file_path)
+                    if not partition_day or not (start <= partition_day <= end):
+                        continue
+                    symbol = file_path.parents[3].name
+                    raw_records = self._read_records(file_path)
+                    file_hash = compute_file_hash(file_path)
+                    files.append({"path": str(file_path), "file_hash": file_hash, "records": len(raw_records)})
+                    for row in raw_records:
+                        normalized = dict(row)
+                        normalized["symbol"] = str(normalized.get("symbol") or symbol)
+                        normalized["report_date"] = self._normalize_date(normalized.get("report_date"))
+                        if not normalized["report_date"]:
+                            raise ValueError("fundamentals report_date is required")
+                        normalized["filing_date"] = self._normalize_date(normalized.get("filing_date"))
+                        normalized["source_vendor"] = vendor
+                        normalized["__input_file_hash"] = file_hash
+                        statement = str(normalized.get("statement_type") or "")
+                        key = (normalized["symbol"], normalized["report_date"], statement)
+                        records[key].append(normalized)
             if records:
                 snapshots[vendor] = VendorSnapshot(manifest=manifest, records_by_key=records, files=files)
         return snapshots
@@ -1155,8 +1158,13 @@ class ReconciliationBuilder:
             return value.date().isoformat()
         if isinstance(value, date):
             return value.isoformat()
+        if value is None:
+            return ""
         if isinstance(value, str):
-            return date.fromisoformat(value).isoformat()
+            text = value.strip()
+            if not text:
+                return ""
+            return date.fromisoformat(text).isoformat()
         raise ValueError("Date fields must be ISO formatted strings or date objects")
 
     def _attach_metadata(

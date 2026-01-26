@@ -6,7 +6,20 @@
     {"name": "occ", "domains": ["option_contract_reference", "option_contract_ohlcv", "option_open_interest"]},
     {"name": "opra", "domains": ["option_contract_reference", "option_contract_ohlcv", "option_open_interest"]},
     {"name": "factset", "domains": ["fundamentals"]},
-    {"name": "sec", "domains": ["fundamentals"]}
+    {"name": "sec", "domains": ["fundamentals"]},
+    {
+      "name": "financialdatasets",
+      "domains": [
+        "fundamentals",
+        "financial_statements",
+        "company_facts",
+        "financial_metrics",
+        "financial_metrics_snapshot",
+        "insider_trades",
+        "institutional_ownership",
+        "news"
+      ]
+    }
   ],
   "reconciliation": {
     "allowed_validation_statuses": ["passed"],
@@ -31,7 +44,7 @@
         "allow_fallback": true
       },
       "fundamentals": {
-        "vendor_priority": ["factset", "sec"],
+      "vendor_priority": ["factset", "sec", "financialdatasets"],
         "fundamentals_of_record": "factset",
         "allow_fallback": true
       }

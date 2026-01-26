@@ -16,6 +16,18 @@ vendors:
     domains: [fundamentals]
   - name: sec
     domains: [fundamentals]
+  - name: financialdatasets
+    domains:
+      [
+        fundamentals,
+        financial_statements,
+        company_facts,
+        financial_metrics,
+        financial_metrics_snapshot,
+        insider_trades,
+        institutional_ownership,
+        news,
+      ]
 
 reconciliation:
   allowed_validation_statuses: ["passed"]
@@ -36,6 +48,6 @@ reconciliation:
       enforce_single_vendor_per_underlying: true
       allow_fallback: true
     fundamentals:
-      vendor_priority: [factset, sec]
+      vendor_priority: [factset, sec, financialdatasets]
       fundamentals_of_record: factset
       allow_fallback: true
