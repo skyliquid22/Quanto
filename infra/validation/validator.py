@@ -53,6 +53,7 @@ class Validator:
         self.run_id = run_id
         self.config = config or {}
         self.allow_naive_timestamps = bool(self.config.get("allow_naive_timestamps", False))
+        self.allow_extra_fields = bool(self.config.get("allow_extra_fields", False))
         self.manifest_base_path = Path(self.config.get("manifest_base_path", DEFAULT_MANIFEST_DIR))
         self.input_file_hashes = list(self.config.get("input_file_hashes", []))
         self.creation_timestamp = self._resolve_creation_timestamp(self.config.get("creation_timestamp"))
@@ -108,11 +109,11 @@ class Validator:
         if not isinstance(record, Mapping):
             raise RecordValidationError("Each record must be a mapping")
 
-        normalized: Dict[str, Any] = {}
+        normalized: Dict[str, Any] = dict(record) if self.allow_extra_fields else {}
         record_keys = set(record.keys())
         expected_keys = set(self.schema.field_specs.keys())
         extra_keys = record_keys - expected_keys
-        if extra_keys:
+        if extra_keys and not self.allow_extra_fields:
             raise RecordValidationError(f"Unexpected field(s) {sorted(extra_keys)} present")
 
         for field_name, spec in self.schema.field_specs.items():

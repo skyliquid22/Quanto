@@ -239,6 +239,24 @@ def _coerce_date(value: object, index: int | None = None) -> date:
     raise TypeError(f"snapshot_date must be a date{position}")
 
 
+def _resolve_key(
+    record: Mapping[str, object],
+    keys: Sequence[str],
+    *,
+    label: str,
+    index: int | None = None,
+) -> str:
+    for key in keys:
+        value = record.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    position = f" at index {index}" if index is not None else ""
+    raise ValueError(f"Missing {label} field{position}; expected one of {list(keys)}")
+
+
 class RawFundamentalsWriter:
     """Writes fundamentals statements partitioned by report date."""
 
@@ -299,6 +317,134 @@ class RawFundamentalsWriter:
     def _resolve_path(self, vendor: str, symbol: str, iso_date: str) -> Path:
         year, month, day = iso_date.split("-")
         return self.base_path / vendor / "fundamentals" / symbol / year / month / f"{day}.parquet"
+
+
+class RawFinancialDatasetsWriter:
+    """Writes Financial Datasets raw domains into canonical raw storage."""
+
+    def __init__(self, base_path: Path | str | None = None) -> None:
+        resolved = base_path if base_path is not None else raw_root()
+        self.base_path = Path(resolved)
+
+    def write_company_facts(
+        self,
+        vendor: str,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        return self._write_symbol_date(
+            vendor,
+            records,
+            domain_dir="company_facts",
+            symbol_keys=("symbol", "ticker"),
+            date_keys=("as_of_date", "snapshot_date", "ingest_date", "date"),
+        )
+
+    def write_financial_metrics(
+        self,
+        vendor: str,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        return self._write_symbol_date(
+            vendor,
+            records,
+            domain_dir="financial_metrics",
+            symbol_keys=("symbol", "ticker"),
+            date_keys=("report_period", "as_of_date", "ingest_date", "date"),
+        )
+
+    def write_financial_metrics_snapshot(
+        self,
+        vendor: str,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        return self._write_symbol_date(
+            vendor,
+            records,
+            domain_dir="financial_metrics_snapshot",
+            symbol_keys=("symbol", "ticker"),
+            date_keys=("as_of_date", "ingest_date", "date"),
+        )
+
+    def write_financial_statements(
+        self,
+        vendor: str,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        return self._write_symbol_date(
+            vendor,
+            records,
+            domain_dir="financial_statements",
+            symbol_keys=("symbol", "ticker"),
+            date_keys=("report_date", "report_period"),
+        )
+
+    def write_insider_trades(
+        self,
+        vendor: str,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        return self._write_symbol_date(
+            vendor,
+            records,
+            domain_dir="insider_trades",
+            symbol_keys=("symbol", "ticker"),
+            date_keys=("transaction_date", "filing_date"),
+        )
+
+    def write_institutional_ownership(
+        self,
+        vendor: str,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        return self._write_symbol_date(
+            vendor,
+            records,
+            domain_dir="institutional_ownership",
+            symbol_keys=("symbol", "ticker", "investor"),
+            date_keys=("report_period",),
+        )
+
+    def write_news(
+        self,
+        vendor: str,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        return self._write_symbol_date(
+            vendor,
+            records,
+            domain_dir="news",
+            symbol_keys=("symbol", "ticker"),
+            date_keys=("date", "published_at", "published_date"),
+        )
+
+    def _write_symbol_date(
+        self,
+        vendor: str,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+        *,
+        domain_dir: str,
+        symbol_keys: Sequence[str],
+        date_keys: Sequence[str],
+    ) -> MutableMapping[str, object]:
+        grouped: MutableMapping[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
+        for index, record in enumerate(records):
+            symbol = _resolve_key(record, symbol_keys, label="symbol", index=index)
+            raw_date = _resolve_key(record, date_keys, label="date", index=index)
+            iso_date = _coerce_date(raw_date, index).isoformat()
+            grouped[(symbol, iso_date)].append(record)
+
+        file_details = []
+        for (symbol, iso_date), items in grouped.items():
+            ordered = sorted(items, key=lambda rec: str(rec.get("ingest_ts") or ""))
+            path = self._resolve_path(vendor, domain_dir, symbol, iso_date)
+            result = write_parquet_atomic(list(ordered), path)
+            file_details.append({"path": str(path), "hash": result["file_hash"], "records": len(items)})
+
+        return {"files": file_details, "total_files": len(file_details)}
+
+    def _resolve_path(self, vendor: str, domain_dir: str, symbol: str, iso_date: str) -> Path:
+        year, month, day = iso_date.split("-")
+        return self.base_path / vendor / domain_dir / symbol / year / month / f"{day}.parquet"
 
 
 def _merge_with_existing(path: Path, new_records: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:

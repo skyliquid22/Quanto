@@ -7,6 +7,7 @@ from typing import Any, Dict, Literal, Mapping, Tuple, Type
 
 from .adapters import (
     EquityIngestionRequest,
+    FinancialDatasetsAdapter,
     IvolatilityEquityAdapter,
     IvolatilityOptionsAdapter,
     IvolatilityOptionsSurfaceAdapter,
@@ -25,6 +26,13 @@ Domain = Literal[
     "option_contract_ohlcv",
     "option_open_interest",
     "fundamentals",
+    "financial_statements",
+    "company_facts",
+    "financial_metrics",
+    "financial_metrics_snapshot",
+    "insider_trades",
+    "institutional_ownership",
+    "news",
     "options_surface_v1",
 ]
 
@@ -132,6 +140,9 @@ class IngestionRouter:
     def route_options_surface_v1(self) -> Mode:
         return "rest"
 
+    def route_financialdatasets_raw(self) -> Mode:
+        return "rest"
+
     def _route_timeseries(self, *, total_days: int, total_symbols: int, has_flat_files: bool) -> Mode:
         cfg = self.config
         if cfg.force_mode:
@@ -230,6 +241,21 @@ class IngestionRouter:
             mode="rest",
             adapter=IvolatilityOptionsSurfaceAdapter,
         )
+        for domain in (
+            "financial_statements",
+            "company_facts",
+            "financial_metrics",
+            "financial_metrics_snapshot",
+            "insider_trades",
+            "institutional_ownership",
+            "news",
+        ):
+            registry[(domain, "financialdatasets", "rest")] = AdapterRoute(
+                domain=domain,
+                vendor="financialdatasets",
+                mode="rest",
+                adapter=FinancialDatasetsAdapter,
+            )
         return registry
 
 

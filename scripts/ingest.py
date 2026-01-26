@@ -14,6 +14,8 @@ from typing import Any, Callable, Mapping, MutableMapping, Sequence
 
 from infra.ingestion.adapters import (
     EquityIngestionRequest,
+    FinancialDatasetsAdapter,
+    FinancialDatasetsRESTClient,
     FundamentalsIngestionRequest,
     IvolatilityOptionsSurfaceAdapter,
     OptionReferenceIngestionRequest,
@@ -28,12 +30,17 @@ from infra.ingestion.adapters import (
     PolygonRESTClient,
 )
 from infra.ingestion.data_pipeline import EquityIngestionPipeline
-from infra.ingestion.fundamentals_pipeline import FundamentalsIngestionPipeline
+from infra.ingestion.fundamentals_pipeline import FinancialDatasetsRawPipeline, FundamentalsIngestionPipeline
 from infra.ingestion.ivolatility_client import IvolatilityClient, IvolatilityClientError
 from infra.ingestion.options_pipeline import OptionPartition, OptionsIngestionPipeline, OptionsIngestionPlan
 from infra.ingestion.request import IngestionRequest as NormalizedIngestionRequest
 from infra.ingestion.router import AdapterRoute, IngestionRouter, Mode
-from infra.storage.raw_writer import RawEquityOHLCVWriter, RawFundamentalsWriter, RawOptionsWriter
+from infra.storage.raw_writer import (
+    RawEquityOHLCVWriter,
+    RawFinancialDatasetsWriter,
+    RawFundamentalsWriter,
+    RawOptionsWriter,
+)
 from infra.paths import get_data_root
 from infra.validation import ValidationError
 
@@ -45,10 +52,27 @@ except Exception:  # pragma: no cover
 SUPPORTED_DOMAINS = {
     "equity_ohlcv",
     "fundamentals",
+    "financial_statements",
+    "company_facts",
+    "financial_metrics",
+    "financial_metrics_snapshot",
+    "insider_trades",
+    "institutional_ownership",
+    "news",
     "option_contract_reference",
     "option_contract_ohlcv",
     "option_open_interest",
     "options_surface_v1",
+}
+
+FINANCIALDATASETS_RAW_DOMAINS = {
+    "financial_statements",
+    "company_facts",
+    "financial_metrics",
+    "financial_metrics_snapshot",
+    "insider_trades",
+    "institutional_ownership",
+    "news",
 }
 
 
@@ -132,6 +156,8 @@ def _dispatch_domain(
         return _handle_equity(args, config, normalized, router, run_id, config_path)
     if domain == "fundamentals":
         return _handle_fundamentals(args, config, normalized, router, run_id, config_path)
+    if domain in FINANCIALDATASETS_RAW_DOMAINS:
+        return _handle_financialdatasets_raw(args, config, normalized, router, run_id, config_path)
     if domain in {"option_contract_reference", "option_contract_ohlcv", "option_open_interest"}:
         return _handle_options(args, config, normalized, router, run_id, config_path)
     if domain == "options_surface_v1":
@@ -255,6 +281,60 @@ def _handle_fundamentals(
     finally:
         for callback in cleanup_callbacks:
             callback()
+    return _success_summary(normalized, run_id, mode, route.adapter_name, config_path, manifest)
+
+
+def _handle_financialdatasets_raw(
+    args: argparse.Namespace,
+    config: Mapping[str, Any],
+    normalized: NormalizedIngestionRequest,
+    router: IngestionRouter,
+    run_id: str,
+    config_path: Path,
+) -> Mapping[str, Any]:
+    domain = normalized.domain
+    forced_mode = _forced_mode(args.mode) or _forced_mode(normalized.mode)
+    mode = forced_mode or router.route_financialdatasets_raw()
+    try:
+        route = router.resolve_vendor_adapter(domain, normalized.vendor, mode)
+    except ValueError as exc:
+        return _failure_summary(normalized, run_id, mode, None, config_path, str(exc))
+
+    data_root = _resolve_data_root(args.data_root)
+    raw_base = _resolve_raw_base(config, data_root)
+    manifest_base_cfg = config.get("manifest_base_dir")
+    manifest_base = Path(manifest_base_cfg).expanduser() if manifest_base_cfg else raw_base
+    manifest_path = manifest_base / normalized.vendor / domain / "manifests" / f"{run_id}.json"
+
+    if args.dry_run:
+        return _dry_run_summary(normalized, run_id, mode, route.adapter_name, config_path, manifest_path, args.force)
+
+    if not args.force and manifest_path.exists():
+        return _failure_summary(
+            normalized,
+            run_id,
+            mode,
+            route.adapter_name,
+            config_path,
+            f"Manifest {manifest_path} already exists. Re-run with --force to overwrite.",
+        )
+
+    rest_cfg, _ = _resolve_ingestion_configs(config, normalized.vendor, normalized.vendor_params)
+    raw_writer = RawFinancialDatasetsWriter(base_path=raw_base)
+    adapter, cleanup_callbacks = _instantiate_financialdatasets_adapter(normalized.vendor, rest_cfg)
+    pipeline = FinancialDatasetsRawPipeline(
+        adapter=adapter,
+        raw_writer=raw_writer,
+        manifest_base_dir=manifest_base,
+        router=router,
+    )
+
+    try:
+        manifest = pipeline.run(normalized, run_id=run_id, forced_mode=forced_mode)
+    finally:
+        for callback in cleanup_callbacks:
+            callback()
+
     return _success_summary(normalized, run_id, mode, route.adapter_name, config_path, manifest)
 
 
@@ -581,6 +661,21 @@ def _instantiate_fundamentals_adapter(
         flat_file_config=dict(flat_cfg) or None,
         vendor=vendor,
     )
+    return adapter, cleanup_callbacks
+
+
+def _instantiate_financialdatasets_adapter(
+    vendor: str,
+    rest_cfg: Mapping[str, Any],
+) -> tuple[FinancialDatasetsAdapter, list[Callable[[], None]]]:
+    cleanup_callbacks: list[Callable[[], None]] = []
+    rest_cfg_local = dict(rest_cfg)
+    api_key = rest_cfg_local.pop("api_key", None) or os.environ.get("FINANCIALDATASETS_API_KEY")
+    if not api_key:
+        raise RuntimeError("Financial Datasets REST ingestion requested but no FINANCIALDATASETS_API_KEY provided")
+    rest_client = FinancialDatasetsRESTClient(api_key, timeout=float(rest_cfg_local.get("timeout", 30.0)))
+    cleanup_callbacks.append(lambda rc=rest_client: asyncio.run(rc.aclose()))
+    adapter = FinancialDatasetsAdapter(rest_client=rest_client, rest_config=rest_cfg_local or None, vendor=vendor)
     return adapter, cleanup_callbacks
 
 

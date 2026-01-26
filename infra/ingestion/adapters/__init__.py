@@ -8,6 +8,11 @@ from .ivolatility_options_surface import (
     OptionsSurfaceIngestionRequest,
     OptionsSurfaceStorage,
 )
+from .financialdatasets_fundamentals import (
+    FinancialDatasetsAdapter,
+    FinancialDatasetsAdapterResult,
+    FinancialDatasetsRESTClient,
+)
 from .polygon_equity import EquityIngestionRequest, PolygonEquityAdapter, PolygonRESTClient, RateLimitError
 from .polygon_fundamentals import (
     FundamentalsAdapterResult,
@@ -42,4 +47,7 @@ __all__ = [
     "IvolatilityOptionsSurfaceAdapter",
     "OptionsSurfaceIngestionRequest",
     "OptionsSurfaceStorage",
+    "FinancialDatasetsAdapter",
+    "FinancialDatasetsAdapterResult",
+    "FinancialDatasetsRESTClient",
 ]
