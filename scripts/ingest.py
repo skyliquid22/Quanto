@@ -674,7 +674,6 @@ def _instantiate_financialdatasets_adapter(
     if not api_key:
         raise RuntimeError("Financial Datasets REST ingestion requested but no FINANCIALDATASETS_API_KEY provided")
     rest_client = FinancialDatasetsRESTClient(api_key, timeout=float(rest_cfg_local.get("timeout", 30.0)))
-    cleanup_callbacks.append(lambda rc=rest_client: asyncio.run(rc.aclose()))
     adapter = FinancialDatasetsAdapter(rest_client=rest_client, rest_config=rest_cfg_local or None, vendor=vendor)
     return adapter, cleanup_callbacks
 

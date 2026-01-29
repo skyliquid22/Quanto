@@ -341,6 +341,9 @@ class FinancialDatasetsRawPipeline:
         return manifest
 
     def _collect_records(self, request: IngestionRequest) -> FinancialDatasetsAdapterResult:
+        return asyncio.run(self._collect_records_async(request))
+
+    async def _collect_records_async(self, request: IngestionRequest) -> FinancialDatasetsAdapterResult:
         options = request.options or {}
         period = str(options.get("period") or "annual")
         limit = options.get("limit")
@@ -348,25 +351,44 @@ class FinancialDatasetsRawPipeline:
             limit = int(limit)
         as_of_date = request.as_of_date or request.end_date or request.start_date
         if request.domain == "company_facts":
-            return asyncio.run(self.adapter.fetch_company_facts_rest(request.symbols, as_of_date=as_of_date))
+            result = await self.adapter.fetch_company_facts_rest(request.symbols, as_of_date=as_of_date)
+            await self.adapter.aclose()
+            return result
         if request.domain == "financial_metrics":
             period = str(options.get("period") or "ttm")
-            return asyncio.run(
-                self.adapter.fetch_financial_metrics_rest(request.symbols, period=period, limit=limit, as_of_date=as_of_date)
+            result = await self.adapter.fetch_financial_metrics_rest(
+                request.symbols, period=period, limit=limit, as_of_date=as_of_date
             )
+            await self.adapter.aclose()
+            return result
         if request.domain == "financial_metrics_snapshot":
-            return asyncio.run(self.adapter.fetch_financial_metrics_snapshot_rest(request.symbols, as_of_date=as_of_date))
+            result = await self.adapter.fetch_financial_metrics_snapshot_rest(request.symbols, as_of_date=as_of_date)
+            await self.adapter.aclose()
+            return result
         if request.domain == "financial_statements":
             period = str(options.get("period") or "annual")
-            return asyncio.run(self.adapter.fetch_financial_statements_rest(request.symbols, period=period, limit=limit))
+            result = await self.adapter.fetch_financial_statements_rest(request.symbols, period=period, limit=limit)
+            await self.adapter.aclose()
+            return result
         if request.domain == "insider_trades":
-            return asyncio.run(self.adapter.fetch_insider_trades_rest(request.symbols, limit=limit))
+            result = await self.adapter.fetch_insider_trades_rest(request.symbols, limit=limit)
+            await self.adapter.aclose()
+            return result
         if request.domain == "institutional_ownership":
-            return asyncio.run(self.adapter.fetch_institutional_ownership_rest(request.symbols))
-        if request.domain == "news":
-            return asyncio.run(
-                self.adapter.fetch_news_rest(request.symbols, start_date=request.start_date, end_date=request.end_date, limit=limit)
+            result = await self.adapter.fetch_institutional_ownership_rest(
+                request.symbols,
+                start_date=request.start_date,
+                end_date=request.end_date,
+                limit=limit,
             )
+            await self.adapter.aclose()
+            return result
+        if request.domain == "news":
+            result = await self.adapter.fetch_news_rest(
+                request.symbols, start_date=request.start_date, end_date=request.end_date, limit=limit
+            )
+            await self.adapter.aclose()
+            return result
         raise ValueError(f"Unsupported Financial Datasets domain '{request.domain}'")
 
     def _write_records(

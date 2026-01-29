@@ -234,7 +234,17 @@ def _coerce_date(value: object, index: int | None = None) -> date:
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, str):
-        return date.fromisoformat(value)
+        text = value.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            return date.fromisoformat(text)
+        except ValueError:
+            try:
+                return datetime.fromisoformat(text).date()
+            except ValueError as exc:
+                position = f" at index {index}" if index is not None else ""
+                raise TypeError(f"snapshot_date must be a date{position}") from exc
     position = f" at index {index}" if index is not None else ""
     raise TypeError(f"snapshot_date must be a date{position}")
 

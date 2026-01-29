@@ -21,6 +21,7 @@ _MAX_LIMITS = {
     "financial_metrics": None,
     "financial_metrics_snapshot": None,
     "insider_trades": 1000,
+    "institutional_ownership": 1000,
     "news": 100,
 }
 
@@ -45,7 +46,7 @@ class FinancialDatasetsRESTClient:
         except ImportError as exc:  # pragma: no cover - optional dependency guard
             raise RuntimeError("httpx must be installed to use FinancialDatasetsRESTClient") from exc
         self._httpx = httpx
-        self._client = httpx.AsyncClient(timeout=timeout)
+        self._client = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
         self.api_key = api_key
 
     async def get(self, path: str, params: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
@@ -136,10 +137,16 @@ class FinancialDatasetsAdapter:
     async def fetch_institutional_ownership_rest(
         self,
         symbols: Sequence[str],
+        *,
+        start_date: date | None,
+        end_date: date | None,
+        limit: int | None,
     ) -> FinancialDatasetsAdapterResult:
         return await self._fetch_per_symbol(
             symbols,
-            lambda symbol: self._fetch_institutional_ownership(symbol),
+            lambda symbol: self._fetch_institutional_ownership(
+                symbol, start_date=start_date, end_date=end_date, limit=limit
+            ),
         )
 
     async def fetch_news_rest(
@@ -154,6 +161,10 @@ class FinancialDatasetsAdapter:
             symbols,
             lambda symbol: self._fetch_news(symbol, start_date=start_date, end_date=end_date, limit=limit),
         )
+
+    async def aclose(self) -> None:
+        if self.rest_client and hasattr(self.rest_client, "aclose"):
+            await self.rest_client.aclose()
 
     async def _fetch_per_symbol(
         self,
@@ -236,16 +247,31 @@ class FinancialDatasetsAdapter:
         limit: int | None,
     ) -> FinancialDatasetsAdapterResult:
         params = {"ticker": symbol}
-        capped = _cap_limit(limit, _MAX_LIMITS["insider_trades"])
+        capped = _cap_limit(limit, _MAX_LIMITS["institutional_ownership"])
         if capped:
             params["limit"] = str(capped)
         payload = await self.rest_client.get("/insider-trades", params=params)
         records = _normalize_list_payload(symbol, payload, "insider_trades", vendor=self.vendor)
         return _result_from_payload("insider_trades", payload, records)
 
-    async def _fetch_institutional_ownership(self, symbol: str) -> FinancialDatasetsAdapterResult:
-        payload = await self.rest_client.get("/institutional-ownership", params={"ticker": symbol})
-        records = _normalize_list_payload(symbol, payload, "institutional-ownership", vendor=self.vendor)
+    async def _fetch_institutional_ownership(
+        self,
+        symbol: str,
+        *,
+        start_date: date | None,
+        end_date: date | None,
+        limit: int | None,
+    ) -> FinancialDatasetsAdapterResult:
+        params: Dict[str, Any] = {"ticker": symbol}
+        if start_date:
+            params["report_period_gte"] = start_date.isoformat()
+        if end_date:
+            params["report_period_lte"] = end_date.isoformat()
+        capped = _cap_limit(limit, _MAX_LIMITS["insider_trades"])
+        if capped:
+            params["limit"] = str(capped)
+        payload = await self.rest_client.get("/institutional-ownership", params=params)
+        records = _normalize_list_payload(symbol, payload, "institutional_ownership", vendor=self.vendor)
         return _result_from_payload("institutional_ownership", payload, records)
 
     async def _fetch_news(
@@ -451,7 +477,14 @@ def _normalize_list_payload(
     *,
     vendor: str,
 ) -> List[Dict[str, Any]]:
-    rows = payload.get(key) or []
+    rows = payload.get(key)
+    if rows is None:
+        if "_" in key:
+            rows = payload.get(key.replace("_", "-"))
+        else:
+            rows = payload.get(key.replace("-", "_"))
+    if rows is None:
+        rows = []
     records: List[Dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, Mapping):
