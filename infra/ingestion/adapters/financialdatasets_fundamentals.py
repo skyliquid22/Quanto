@@ -58,6 +58,15 @@ class FinancialDatasetsRESTClient:
         response.raise_for_status()
         return response.json()
 
+    async def post(self, path: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        headers = {"X-API-KEY": self.api_key}
+        response = await self._client.post(f"{self.BASE_URL}{path}", json=payload, headers=headers)
+        if response.status_code == 429:
+            retry = float(response.headers.get("Retry-After", "1"))
+            raise RateLimitError("Financial Datasets rate limit exceeded", retry_after=retry)
+        response.raise_for_status()
+        return response.json()
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -161,6 +170,19 @@ class FinancialDatasetsAdapter:
             symbols,
             lambda symbol: self._fetch_news(symbol, start_date=start_date, end_date=end_date, limit=limit),
         )
+
+    async def search_financials_screener(
+        self,
+        *,
+        filters: Sequence[Mapping[str, Any]],
+        limit: int | None = None,
+    ) -> Mapping[str, Any]:
+        if not self.rest_client:
+            raise RuntimeError("REST ingestion requested but no rest_client configured")
+        payload: Dict[str, Any] = {"filters": list(filters)}
+        if limit is not None:
+            payload["limit"] = int(limit)
+        return await self.rest_client.post("/financials/search/screener", payload)
 
     async def aclose(self) -> None:
         if self.rest_client and hasattr(self.rest_client, "aclose"):
