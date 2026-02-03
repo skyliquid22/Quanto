@@ -30,6 +30,10 @@ from research.features.sets.options_surface_v1 import (
     build_options_surface_v1_features,
     build_options_surface_v1_lag1_features,
 )
+from research.features.sets.fundamentals_v1 import (
+    FUNDAMENTALS_V1_COLUMNS,
+    attach_fundamentals_features,
+)
 from research.features.regime_features_v1 import (
     REGIME_FEATURE_COLUMNS,
     compute_primary_regime_features,
@@ -82,6 +86,9 @@ CORE_V1_XSEC_OBSERVATION_COLUMNS = _merge_observation_columns(
     warning_label="core_v1_xsec",
 )
 CORE_V1_XSEC_REGIME_OPTS_COLUMNS = CORE_V1_XSEC_OBSERVATION_COLUMNS + OPTIONS_SURFACE_V1_COLUMNS
+CORE_V1_FUNDAMENTALS_COLUMNS = CORE_V1_OBSERVATION_COLUMNS + FUNDAMENTALS_V1_COLUMNS
+CORE_V1_FUNDAMENTALS_XSEC_COLUMNS = CORE_V1_XSEC_OBSERVATION_COLUMNS + FUNDAMENTALS_V1_COLUMNS
+CORE_V1_FUNDAMENTALS_XSEC_OPTS_COLUMNS = CORE_V1_XSEC_REGIME_OPTS_COLUMNS + FUNDAMENTALS_V1_COLUMNS
 
 
 @dataclass(frozen=True)
@@ -135,6 +142,9 @@ _UNIVERSE_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "core_v1_xsec_regime": CORE_V1_XSEC_OBSERVATION_COLUMNS + REGIME_FEATURE_COLUMNS,
     "core_v1_xsec_regime_opts_v1": CORE_V1_XSEC_REGIME_OPTS_COLUMNS + REGIME_FEATURE_COLUMNS,
     "core_v1_xsec_regime_opts_v1_lag1": CORE_V1_XSEC_REGIME_OPTS_COLUMNS + REGIME_FEATURE_COLUMNS,
+    "core_v1_fundamentals_regime_v1": CORE_V1_FUNDAMENTALS_COLUMNS + REGIME_FEATURE_COLUMNS,
+    "core_v1_fundamentals_regime_xsec_v1": CORE_V1_FUNDAMENTALS_XSEC_COLUMNS + REGIME_FEATURE_COLUMNS,
+    "core_v1_fundamentals_regime_opts_v1": CORE_V1_FUNDAMENTALS_XSEC_OPTS_COLUMNS + REGIME_FEATURE_COLUMNS,
 }
 _REGIME_FEATURE_OBSERVATION_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "regime_v1": REGIME_FEATURE_COLUMNS,
@@ -151,6 +161,9 @@ _FEATURE_SET_DEFAULT_REGIME: Dict[str, str] = {
     "core_v1_xsec_regime": "regime_v1",
     "core_v1_xsec_regime_opts_v1": "regime_v1",
     "core_v1_xsec_regime_opts_v1_lag1": "regime_v1",
+    "core_v1_fundamentals_regime_v1": "regime_v1",
+    "core_v1_fundamentals_regime_xsec_v1": "regime_v1",
+    "core_v1_fundamentals_regime_opts_v1": "regime_v1",
 }
 
 
@@ -350,6 +363,13 @@ def _core_v1_builder(
     return compute_core_features_v1(equity_df)
 
 
+def _core_v1_fundamentals_builder(
+    equity_df: "pd.DataFrame",
+    _: CanonicalOptionData | None,
+    context: FeatureBuildContext,
+) -> "pd.DataFrame":
+    core = compute_core_features_v1(equity_df)
+    return attach_fundamentals_features(core, context)
 
 def _load_options_payload(
     symbol: str,
@@ -566,6 +586,12 @@ _FEATURE_REGISTRY: Dict[str, _FeatureSetSpec] = {
         requires_options=False,
         builder=_core_v1_builder,
     ),
+    "core_v1_fundamentals_v1": _FeatureSetSpec(
+        name="core_v1_fundamentals_v1",
+        observation_columns=CORE_V1_FUNDAMENTALS_COLUMNS,
+        requires_options=False,
+        builder=_core_v1_fundamentals_builder,
+    ),
     "options_surface_v1": _FeatureSetSpec(
         name="options_surface_v1",
         observation_columns=OPTIONS_SURFACE_V1_COLUMNS,
@@ -594,6 +620,10 @@ __all__ = [
     "EQUITY_XSEC_OBSERVATION_COLUMNS",
     "CORE_V1_XSEC_OBSERVATION_COLUMNS",
     "CORE_V1_XSEC_REGIME_OPTS_COLUMNS",
+    "CORE_V1_FUNDAMENTALS_COLUMNS",
+    "CORE_V1_FUNDAMENTALS_XSEC_COLUMNS",
+    "CORE_V1_FUNDAMENTALS_XSEC_OPTS_COLUMNS",
+    "FUNDAMENTALS_V1_COLUMNS",
     "OPTIONS_SURFACE_V1_COLUMNS",
     "normalize_feature_set_name",
     "normalize_regime_feature_set_name",
