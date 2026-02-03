@@ -121,9 +121,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--regime-feature-set", help="Override regime feature set for panel construction.")
     parser.add_argument(
         "--policy",
-        choices=["equal_weight", "sma", "ppo"],
         default="equal_weight",
-        help="Policy to evaluate.",
+        help="Policy to evaluate (equal_weight, sma, ppo, sac, or sac_* preset).",
     )
     parser.add_argument("--fast-window", type=int, default=20, help="Fast SMA window for features.")
     parser.add_argument("--slow-window", type=int, default=50, help="Slow SMA window for features.")
@@ -140,7 +139,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--min-cash", type=float, default=0.0, help="Minimum cash allocation (1 - max exposure).")
     parser.add_argument("--max-turnover-1d", type=float, help="Optional 1-day L1 turnover cap.")
     parser.add_argument("--allow-short", action="store_true", help="Disable the long-only projection step.")
-    parser.add_argument("--checkpoint", help="Path to PPO checkpoint when --policy=ppo.")
+    parser.add_argument("--checkpoint", help="Path to PPO/SAC checkpoint when --policy=ppo|sac.")
     parser.add_argument("--data-root", help="Override QUANTO data root.")
     parser.add_argument("--out-dir", help="Destination directory for metrics.json.")
     parser.add_argument("--run-id", help="Run identifier override.")
@@ -333,7 +332,7 @@ def _run_policy_rollout(
     end: date,
     interval: str,
 ) -> Tuple[str, Dict[str, Any], EvalSeries, Dict[str, str]]:
-    policy_name = args.policy
+    policy_name = _normalize_policy_name(args.policy)
     rollout_metadata = _build_rollout_metadata(
         symbols,
         interval,
@@ -351,6 +350,11 @@ def _run_policy_rollout(
             args, rows, observation_columns, env_config, rollout_metadata
         )
         return ppo_policy_id, details, series, dict(sorted(inputs_used.items()))
+    if policy_name == "sac":
+        series, sac_policy_id, details = _run_sac_rollout(
+            args, rows, observation_columns, env_config, rollout_metadata
+        )
+        return sac_policy_id, details, series, dict(sorted(inputs_used.items()))
     env = SignalWeightTradingEnv(rows, config=env_config, observation_columns=observation_columns)
     if policy_name == "sma":
         policy_config = SMAWeightPolicyConfig(mode=args.policy_mode, sigmoid_scale=args.sigmoid_scale)
@@ -415,6 +419,46 @@ def _run_ppo_rollout(
     policy_id = f"ppo_{checkpoint_path.stem}"
     details = {
         "type": "ppo",
+        "checkpoint": checkpoint_path.name,
+        "checkpoint_hash": compute_file_hash(checkpoint_path),
+    }
+    return series, policy_id, details
+
+
+def _run_sac_rollout(
+    args: argparse.Namespace,
+    rows: Sequence[Mapping[str, object]],
+    observation_columns: Sequence[str],
+    env_config: SignalWeightEnvConfig,
+    rollout_metadata: Mapping[str, object],
+) -> Tuple[EvalSeries, str, Dict[str, Any]]:
+    checkpoint = args.checkpoint
+    if not checkpoint:
+        raise SystemExit("--checkpoint is required when --policy=sac")
+    try:
+        from stable_baselines3 import SAC as SB3SAC  # type: ignore
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise SystemExit("stable_baselines3 is required for SAC evaluation") from exc
+    checkpoint_path = Path(checkpoint)
+    if not checkpoint_path.exists():
+        raise SystemExit(f"Checkpoint not found: {checkpoint}")
+    model = SB3SAC.load(str(checkpoint_path))
+    env = GymWeightTradingEnv(rows, config=env_config, observation_columns=observation_columns)
+    eval_result: EvaluationResult = ppo_evaluate(model, env)
+    costs = [float(step.get("cost_paid", 0.0)) for step in eval_result.steps]
+    series = from_rollout(
+        timestamps=eval_result.timestamps,
+        account_values=eval_result.account_values,
+        weights=eval_result.weights,
+        transaction_costs=costs,
+        symbols=eval_result.symbols,
+        rollout_metadata=rollout_metadata,
+        regime_features=eval_result.regime_features,
+        regime_feature_names=eval_result.regime_feature_names,
+    )
+    policy_id = f"sac_{checkpoint_path.stem}"
+    details = {
+        "type": "sac",
         "checkpoint": checkpoint_path.name,
         "checkpoint_hash": compute_file_hash(checkpoint_path),
     }
@@ -605,8 +649,9 @@ def _build_rollout_metadata(
     args: argparse.Namespace,
     sma_config: SMAStrategyConfig,
 ) -> Dict[str, Any]:
+    normalized = _normalize_policy_name(policy_name)
     policy_details: Dict[str, Any]
-    if policy_name == "sma":
+    if normalized == "sma":
         policy_details = {
             "type": "sma_weight",
             "fast_window": args.fast_window,
@@ -614,9 +659,14 @@ def _build_rollout_metadata(
             "mode": args.policy_mode,
             "sigmoid_scale": args.sigmoid_scale,
         }
-    elif policy_name == "ppo":
+    elif normalized == "ppo":
         policy_details = {
             "type": "ppo",
+            "checkpoint": args.checkpoint,
+        }
+    elif normalized == "sac":
+        policy_details = {
+            "type": "sac",
             "checkpoint": args.checkpoint,
         }
     else:
@@ -642,6 +692,13 @@ def _parse_optional_date(value: str | None) -> date | None:
     if not value:
         return None
     return date.fromisoformat(str(value))
+
+
+def _normalize_policy_name(policy: str) -> str:
+    name = str(policy or "").strip().lower()
+    if name.startswith("sac"):
+        return "sac"
+    return name
 
 
 def _slice_rows_by_date(

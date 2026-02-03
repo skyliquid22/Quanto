@@ -100,8 +100,8 @@ class ExperimentSpec:
         if not feature_set:
             raise ValueError("feature_set must be provided")
         policy = _require_str(payload, "policy").strip().lower()
-        if policy not in {"equal_weight", "sma", "ppo"}:
-            raise ValueError("policy must be one of: equal_weight, sma, ppo")
+        if policy not in {"equal_weight", "sma", "ppo"} and not policy.startswith("sac"):
+            raise ValueError("policy must be one of: equal_weight, sma, ppo, sac_*")
         policy_params = _normalize_mapping(payload.get("policy_params") or {})
         cost_config = _build_cost_config(payload.get("cost_config"))
         evaluation_split = _build_evaluation_split(payload.get("evaluation_split"))

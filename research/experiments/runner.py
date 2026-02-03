@@ -39,6 +39,7 @@ from research.risk import RiskConfig
 from research.strategies.sma_crossover import SMAStrategyConfig
 from scripts.evaluate_agent import run_evaluation as evaluate_cli, _derive_run_id
 from scripts.train_ppo_weight_agent import run_training as train_ppo_cli
+from scripts.train_sac_weight_agent import run_training as train_sac_cli
 
 ALLOWED_TEST_WINDOWS = (1, 3, 4, 6, 12)
 
@@ -103,6 +104,12 @@ def run_experiment(
         checkpoint_path = _extract_checkpoint(training_summary, resolved_data_root)
         if checkpoint_path is None or not checkpoint_path.exists():
             raise RuntimeError("PPO training did not produce a checkpoint; cannot continue.")
+        training_artifacts = _materialize_training_artifacts(training_summary, resolved_data_root, paths.runs_dir)
+    elif _is_sac_policy(spec.policy):
+        training_summary = _run_sac_training(spec, resolved_data_root, data_split)
+        checkpoint_path = _extract_checkpoint(training_summary, resolved_data_root)
+        if checkpoint_path is None or not checkpoint_path.exists():
+            raise RuntimeError("SAC training did not produce a checkpoint; cannot continue.")
         training_artifacts = _materialize_training_artifacts(training_summary, resolved_data_root, paths.runs_dir)
 
     evaluation_summary, evaluation_payload, metrics_src = _run_evaluation(
@@ -234,6 +241,58 @@ def _run_training(spec: ExperimentSpec, data_root: Path, data_split: DataSplit) 
         raise RuntimeError(f"PPO training failed: {exc}") from exc
 
 
+def _run_sac_training(spec: ExperimentSpec, data_root: Path, data_split: DataSplit) -> Mapping[str, Any]:
+    params = dict(spec.policy_params)
+    fast_window = int(params.get("fast_window", 20))
+    slow_window = int(params.get("slow_window", 50))
+    if fast_window >= slow_window:
+        raise ValueError("fast_window must be less than slow_window for SAC.")
+    reward_version = params.get("reward_version")
+    if isinstance(reward_version, str):
+        reward_version = reward_version.strip() or None
+    risk_cfg = spec.risk_config
+    args = argparse.Namespace(
+        symbol=spec.symbols[0],
+        symbols=list(spec.symbols) if len(spec.symbols) > 1 else None,
+        start_date=spec.start_date.isoformat(),
+        end_date=spec.end_date.isoformat(),
+        interval=spec.interval,
+        feature_set=spec.feature_set,
+        fast_window=fast_window,
+        slow_window=slow_window,
+        transaction_cost_bp=spec.cost_config.transaction_cost_bp,
+        seed=spec.seed,
+        policy_preset=_resolve_sac_preset(spec.policy),
+        policy_params=params,
+        reward_version=reward_version,
+        run_id=spec.experiment_id,
+        data_root=str(data_root),
+        regime_feature_set=spec.regime_feature_set,
+        vendor="polygon",
+        live=False,
+        ingest_mode="rest",
+        canonical_domain="equity_ohlcv",
+        force_ingest=False,
+        force_canonical_build=False,
+        train_start_date=data_split.train_start.isoformat(),
+        train_end_date=data_split.train_end.isoformat(),
+        test_start_date=data_split.test_start.isoformat(),
+        test_end_date=data_split.test_end.isoformat(),
+        train_ratio=data_split.train_ratio,
+        test_ratio=data_split.test_ratio,
+        test_window_months=data_split.test_window_months,
+        max_weight=risk_cfg.max_weight,
+        exposure_cap=risk_cfg.exposure_cap,
+        min_cash=risk_cfg.min_cash,
+        max_turnover_1d=risk_cfg.max_turnover_1d,
+        allow_short=not risk_cfg.long_only,
+    )
+    try:
+        return train_sac_cli(args)
+    except SystemExit as exc:  # pragma: no cover - defensive
+        raise RuntimeError(f"SAC training failed: {exc}") from exc
+
+
 def _extract_checkpoint(summary: Mapping[str, Any], data_root: Path) -> Path | None:
     artifacts = summary.get("artifacts") or {}
     checkpoint_rel = artifacts.get("model")
@@ -278,6 +337,7 @@ def _run_evaluation(
     if spec.hierarchy_enabled:
         return _run_hierarchical_evaluation(spec, data_root, evaluation_dir, data_split)
     policy = spec.policy
+    policy_kind = _normalize_policy_kind(policy)
     params = dict(spec.policy_params)
     fast_window: int
     slow_window: int
@@ -300,9 +360,14 @@ def _run_evaluation(
         fast_window = DEFAULT_FAST
         slow_window = DEFAULT_SLOW
         policy_mode = "hard"
-    elif policy == "ppo":
+    elif policy_kind == "ppo":
         if not checkpoint_path:
             raise ValueError("PPO policy requires a checkpoint.")
+        fast_window = DEFAULT_FAST
+        slow_window = DEFAULT_SLOW
+    elif policy_kind == "sac":
+        if not checkpoint_path:
+            raise ValueError("SAC policy requires a checkpoint.")
         fast_window = DEFAULT_FAST
         slow_window = DEFAULT_SLOW
     else:
@@ -316,7 +381,7 @@ def _run_evaluation(
         interval=spec.interval,
         feature_set=spec.feature_set,
         regime_feature_set=spec.regime_feature_set,
-        policy=policy,
+        policy=policy_kind,
         fast_window=fast_window,
         slow_window=slow_window,
         policy_mode=policy_mode,
@@ -586,6 +651,24 @@ def _optional_int(params: Mapping[str, Any], key: str) -> int | None:
         return int(params[key])
     except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
         raise ValueError(f"{key} must be an integer.") from exc
+
+
+def _is_sac_policy(policy: str) -> bool:
+    return str(policy or "").strip().lower().startswith("sac")
+
+
+def _normalize_policy_kind(policy: str) -> str:
+    name = str(policy or "").strip().lower()
+    if name.startswith("sac"):
+        return "sac"
+    return name
+
+
+def _resolve_sac_preset(policy: str) -> str:
+    name = str(policy or "").strip().lower()
+    if name == "sac":
+        return "sac_core_v1"
+    return name
 
 
 def _resolve_data_split(spec: ExperimentSpec, data_root: Path) -> DataSplit:
