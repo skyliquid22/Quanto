@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
 from infra.paths import get_data_root
+from research.validation.data_health import run_data_health_preflight
 
 
 @dataclass(frozen=True)
@@ -677,12 +679,90 @@ def generate_experiment_report(
             raise
         print(f"Plotting skipped: {exc}")
 
+    data_health_payload = _data_health_payload(metadata, data_root=data_root)
+    data_health_table = _data_health_table(data_health_payload)
+
     return {
         "metadata": summarize_metadata(metadata),
         "metrics_table": metrics_table,
         "comparison_table": comparison_table,
         "winner_table": winner_table,
+        "data_health": data_health_payload,
+        "data_health_table": data_health_table,
         "figures": figures,
         "baseline_experiment_id": baseline_artifacts.experiment_id if baseline_artifacts else None,
         "output_dir": output_dir,
     }
+
+
+def _data_health_payload(metadata: Mapping[str, Any], *, data_root: Optional[Path]) -> Dict[str, Any] | None:
+    symbols = metadata.get("symbols")
+    if not isinstance(symbols, list):
+        return None
+    start = _parse_iso_date(metadata.get("start_date"))
+    end = _parse_iso_date(metadata.get("end_date"))
+    if not start or not end:
+        return None
+    feature_set = metadata.get("feature_set")
+    try:
+        return run_data_health_preflight(
+            symbols=symbols,
+            start_date=start,
+            end_date=end,
+            feature_set=str(feature_set) if feature_set else None,
+            data_root=data_root,
+            max_missing_ratio=None,
+            max_nan_ratio=None,
+            strict=False,
+        )
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _data_health_table(payload: Mapping[str, Any] | None) -> Sequence[Mapping[str, Any]] | None:
+    if not payload:
+        return None
+    if "error" in payload:
+        return [{"check": "data_health_error", "value": payload.get("error")}]
+    rows: List[Dict[str, Any]] = []
+    canonical = payload.get("canonical") or {}
+    missing_ratio = canonical.get("overall", {}).get("missing_ratio")
+    rows.append({"check": "equity_missing_ratio", "value": _format_value(missing_ratio)})
+
+    features = payload.get("features") or {}
+    if isinstance(features, Mapping) and features:
+        nan_ratio = features.get("overall", {}).get("nan_ratio")
+        rows.append({"check": "feature_nan_ratio", "value": _format_value(nan_ratio)})
+        max_column = _max_column_nan_ratio(features)
+        rows.append({"check": "feature_max_column_nan", "value": _format_value(max_column)})
+
+    fundamentals = payload.get("fundamentals") or {}
+    if isinstance(fundamentals, Mapping) and fundamentals:
+        overall = fundamentals.get("overall", {})
+        rows.append({"check": "fund_stale_ratio", "value": _format_value(overall.get("stale_ratio"))})
+        rows.append({"check": "fund_missing_symbols", "value": overall.get("missing_symbols")})
+    return rows
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _max_column_nan_ratio(feature_report: Mapping[str, Any]) -> float | None:
+    summary = feature_report.get("summary_by_column")
+    if not isinstance(summary, Mapping):
+        return None
+    ratios = []
+    for entry in summary.values():
+        if isinstance(entry, Mapping):
+            ratio = entry.get("nan_ratio")
+            if isinstance(ratio, (int, float)):
+                ratios.append(float(ratio))
+    if not ratios:
+        return None
+    return max(ratios)

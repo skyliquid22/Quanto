@@ -4,7 +4,12 @@ from datetime import date
 
 import pandas as pd
 
-from research.validation.data_health import compute_canonical_health, compute_feature_health, evaluate_thresholds
+from research.validation.data_health import (
+    compute_canonical_health,
+    compute_feature_health,
+    compute_fundamentals_health,
+    evaluate_thresholds,
+)
 from research.datasets.canonical_equity_loader import CanonicalEquitySlice
 
 
@@ -66,3 +71,31 @@ def test_feature_health_nan_ratios_and_thresholds() -> None:
     )
     assert "missing_ratio_exceeded" in failures
     assert "nan_ratio_exceeded" in failures
+
+
+def test_fundamentals_health_staleness() -> None:
+    frame_a = pd.DataFrame(
+        {
+            "report_date": ["2024-12-31"],
+            "filing_date": ["2025-02-15"],
+            "period": ["quarterly"],
+            "fiscal_period": ["Q4"],
+        }
+    )
+    frame_b = pd.DataFrame(
+        {
+            "report_date": ["2025-09-30"],
+            "filing_date": ["2025-11-05"],
+            "period": ["quarterly"],
+            "fiscal_period": ["Q3"],
+        }
+    )
+    report = compute_fundamentals_health(
+        {"AAA": frame_a, "BBB": frame_b},
+        start_date=date(2025, 1, 1),
+        end_date=date(2025, 12, 31),
+        stale_days=180,
+    )
+    summary = report["summary_by_symbol"]
+    assert summary["AAA"]["stale_at_end"] is True
+    assert summary["BBB"]["stale_at_end"] is False

@@ -14,9 +14,11 @@ from infra.paths import get_data_root
 from research.validation.data_health import (
     build_feature_frames,
     compute_canonical_health,
+    compute_fundamentals_health,
     compute_feature_health,
     evaluate_thresholds,
     load_canonical_equity_pandas,
+    load_canonical_fundamentals_pandas,
     resolve_run_id,
 )
 
@@ -93,6 +95,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             "feature_summary": feature_report,
         }
 
+    fundamentals_payload: Dict[str, Any] | None = None
+    if args.feature_set and _feature_set_uses_fundamentals(args.feature_set):
+        fundamentals_load = load_canonical_fundamentals_pandas(
+            args.symbols,
+            start,
+            end,
+            data_root=data_root,
+            parquet_engine=args.parquet_engine,
+        )
+        fundamentals_report = compute_fundamentals_health(
+            fundamentals_load.frames,
+            start_date=start,
+            end_date=end,
+        )
+        fundamentals_payload = {
+            "feature_set": args.feature_set,
+            "symbols": sorted(fundamentals_load.frames),
+            "start_date": args.start_date,
+            "end_date": args.end_date,
+            "fundamentals_summary": fundamentals_report,
+        }
+
     run_id = args.run_id or resolve_run_id(
         {
             "domain": args.domain,
@@ -112,6 +136,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if feature_payload is not None:
         feature_path = output_dir / "feature_summary.json"
         feature_path.write_text(json.dumps(feature_payload, indent=2, sort_keys=True), encoding="utf-8")
+    fundamentals_path = None
+    if fundamentals_payload is not None:
+        fundamentals_path = output_dir / "fundamentals_summary.json"
+        fundamentals_path.write_text(
+            json.dumps(fundamentals_payload, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
     max_missing_ratio = args.max_missing_ratio
     max_nan_ratio = args.max_nan_ratio
@@ -134,9 +164,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "run_id": run_id,
         "canonical_path": str(canonical_path),
         "feature_path": str(feature_path) if feature_path else None,
+        "fundamentals_path": str(fundamentals_path) if fundamentals_path else None,
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
+
+
+def _feature_set_uses_fundamentals(feature_set: str) -> bool:
+    return "fundamentals" in str(feature_set or "").strip().lower()
 
 
 if __name__ == "__main__":  # pragma: no cover

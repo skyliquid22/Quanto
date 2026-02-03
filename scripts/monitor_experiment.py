@@ -46,6 +46,11 @@ def main() -> int:
     if winner_table is not None and not winner_table.empty:
         print("\n" + format_table(winner_table))
 
+    data_health = report.get("data_health_table")
+    if data_health:
+        print("\nData Health")
+        print(format_table(data_health))
+
     figures = report.get("figures") or {}
     if figures:
         print("\nSaved plots:")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
@@ -33,6 +33,12 @@ CalendarMode = str
 @dataclass(frozen=True)
 class CanonicalLoadResult:
     slices: Mapping[str, CanonicalEquitySlice]
+    file_hashes: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class FundamentalsLoadResult:
+    frames: Mapping[str, "pd.DataFrame"]
     file_hashes: Mapping[str, str]
 
 
@@ -95,6 +101,49 @@ def load_canonical_equity_pandas(
             merged.index = pd.DatetimeIndex(merged.index, tz="UTC", name="timestamp")
         slices[symbol] = CanonicalEquitySlice(symbol=symbol, frame=merged, file_paths=files)
     return CanonicalLoadResult(slices=slices, file_hashes=hashes)
+
+
+def load_canonical_fundamentals_pandas(
+    symbols: Sequence[str],
+    start_date: date,
+    end_date: date,
+    *,
+    data_root: Path | None = None,
+    parquet_engine: str = "fastparquet",
+    lookback_days: int = 400,
+) -> FundamentalsLoadResult:
+    _ensure_pandas_available()
+    resolved_root = Path(data_root) if data_root else get_data_root()
+    ordered = _ordered_symbols(symbols)
+    base = resolved_root / "canonical" / "fundamentals"
+    frames: Dict[str, "pd.DataFrame"] = {}
+    hashes: Dict[str, str] = {}
+    lookback_start = start_date - timedelta(days=max(0, int(lookback_days)))
+    for symbol in ordered:
+        symbol_dir = base / symbol
+        symbol_frames: List["pd.DataFrame"] = []
+        if symbol_dir.exists():
+            for year in range(lookback_start.year, end_date.year + 1):
+                year_dir = symbol_dir / f"{year}"
+                if not year_dir.exists():
+                    continue
+                for path in year_dir.rglob("*.parquet"):
+                    partition_day = _parse_fundamentals_partition(path)
+                    if not partition_day:
+                        continue
+                    if partition_day < lookback_start or partition_day > end_date:
+                        continue
+                    hashes[_relative_to(path, resolved_root)] = compute_file_hash(path)
+                    try:
+                        frame = pd.read_parquet(path, engine=parquet_engine)
+                    except Exception as exc:
+                        raise exc
+                    if frame is None or frame.empty:
+                        continue
+                    symbol_frames.append(frame)
+        merged = pd.concat(symbol_frames, ignore_index=True) if symbol_frames else pd.DataFrame()
+        frames[symbol] = merged
+    return FundamentalsLoadResult(frames=frames, file_hashes=hashes)
 
 
 def compute_canonical_health(
@@ -201,6 +250,79 @@ def compute_feature_health(
             "rows": total_rows,
             "nan_count": total_nans,
             "nan_ratio": overall_nan_ratio,
+        },
+    }
+
+
+def compute_fundamentals_health(
+    frames_by_symbol: Mapping[str, "pd.DataFrame"],
+    *,
+    start_date: date,
+    end_date: date,
+    stale_days: int = 180,
+) -> Dict[str, Any]:
+    _ensure_pandas_available()
+    summary_by_symbol: Dict[str, Any] = {}
+    stale_count = 0
+    missing_count = 0
+    for symbol in sorted(frames_by_symbol):
+        frame = frames_by_symbol[symbol]
+        if frame.empty:
+            summary_by_symbol[symbol] = {
+                "rows": 0,
+                "rows_in_window": 0,
+                "first_report_date": None,
+                "last_report_date": None,
+                "last_as_of_date": None,
+                "stale_days_end": None,
+                "stale_at_end": None,
+            }
+            missing_count += 1
+            continue
+        prepared = _prepare_fundamentals_for_health(frame)
+        if prepared.empty:
+            summary_by_symbol[symbol] = {
+                "rows": 0,
+                "rows_in_window": 0,
+                "first_report_date": None,
+                "last_report_date": None,
+                "last_as_of_date": None,
+                "stale_days_end": None,
+                "stale_at_end": None,
+            }
+            missing_count += 1
+            continue
+        report_dates = prepared["report_date"]
+        rows_in_window = prepared[
+            (report_dates.dt.date >= start_date) & (report_dates.dt.date <= end_date)
+        ]
+        last_report = report_dates.max()
+        last_as_of = prepared["as_of_date"].max()
+        stale_days_end = None
+        stale_at_end = None
+        if pd.notna(last_as_of):
+            stale_days_end = (end_date - last_as_of.date()).days
+            stale_at_end = stale_days_end > stale_days
+            if stale_at_end:
+                stale_count += 1
+        summary_by_symbol[symbol] = {
+            "rows": int(len(prepared)),
+            "rows_in_window": int(len(rows_in_window)),
+            "first_report_date": _format_date(report_dates.min().date() if pd.notna(report_dates.min()) else None),
+            "last_report_date": _format_date(last_report.date() if pd.notna(last_report) else None),
+            "last_as_of_date": _format_date(last_as_of.date() if pd.notna(last_as_of) else None),
+            "stale_days_end": stale_days_end,
+            "stale_at_end": stale_at_end,
+        }
+    total_symbols = len(frames_by_symbol)
+    return {
+        "stale_days_threshold": stale_days,
+        "summary_by_symbol": summary_by_symbol,
+        "overall": {
+            "symbols": total_symbols,
+            "missing_symbols": missing_count,
+            "stale_symbols": stale_count,
+            "stale_ratio": _safe_ratio(stale_count, total_symbols),
         },
     }
 
@@ -346,6 +468,7 @@ def run_data_health_preflight(
     )
 
     feature_report = None
+    fundamentals_report = None
     feature_set_name = str(feature_set).strip() if feature_set else ""
     if feature_set_name:
         if is_universe_feature_set(feature_set_name):
@@ -366,6 +489,26 @@ def run_data_health_preflight(
                     raise RuntimeError(message) from exc
                 print(message, file=sys.stderr)  # noqa: T201 - CLI warning
                 feature_report = None
+        if _feature_set_uses_fundamentals(feature_set_name):
+            try:
+                fundamentals_load = load_canonical_fundamentals_pandas(
+                    symbols,
+                    start_date,
+                    end_date,
+                    data_root=data_root,
+                    parquet_engine=parquet_engine,
+                )
+                fundamentals_report = compute_fundamentals_health(
+                    fundamentals_load.frames,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except Exception as exc:
+                message = f"Data health preflight skipped fundamentals checks: {exc}"
+                if strict:
+                    raise RuntimeError(message) from exc
+                print(message, file=sys.stderr)  # noqa: T201 - CLI warning
+                fundamentals_report = {"error": str(exc)}
 
     failures = evaluate_thresholds(
         canonical_report=canonical_report,
@@ -376,6 +519,7 @@ def run_data_health_preflight(
     payload = {
         "canonical": canonical_report,
         "features": feature_report,
+        "fundamentals": fundamentals_report,
         "failures": failures,
         "settings": {
             "calendar_mode": calendar_mode,
@@ -522,6 +666,61 @@ def _format_date(value: date | None) -> str | None:
     return value.isoformat()
 
 
+def _feature_set_uses_fundamentals(feature_set: str) -> bool:
+    name = str(feature_set or "").strip().lower()
+    return "fundamentals" in name
+
+
+def _parse_fundamentals_partition(path: Path) -> date | None:
+    try:
+        day = int(path.stem)
+        month = int(path.parent.name)
+        year = int(path.parent.parent.name)
+        return date(year, month, day)
+    except Exception:
+        return None
+
+
+def _prepare_fundamentals_for_health(frame: "pd.DataFrame") -> "pd.DataFrame":
+    report = frame.get("report_date")
+    if report is None:
+        report = frame.get("report_period")
+    report = pd.to_datetime(report, utc=True, errors="coerce")
+    report = report.dt.normalize()
+    filing = pd.to_datetime(frame.get("filing_date"), utc=True, errors="coerce")
+    filing = filing.dt.normalize()
+    data = frame.copy()
+    data["report_date"] = report
+    data["filing_date"] = filing
+    data = data.dropna(subset=["report_date"])
+    period = data.get("period")
+    fiscal = data.get("fiscal_period")
+    if period is None:
+        period = [""] * len(data)
+    if fiscal is None:
+        fiscal = [""] * len(data)
+    normalized = [_normalize_period(p, f) for p, f in zip(period, fiscal)]
+    data["period"] = normalized
+    lag_days = pd.Series(normalized).map({"annual": 90, "quarterly": 45}).fillna(45)
+    fallback = data["report_date"] + pd.to_timedelta(lag_days, unit="D")
+    data["as_of_date"] = data["filing_date"].fillna(fallback)
+    return data
+
+
+def _normalize_period(period: object, fiscal_period: object) -> str:
+    text = str(period or "").strip().lower()
+    if text in {"quarter", "quarterly", "q", "qtr"}:
+        return "quarterly"
+    if text in {"annual", "fy", "year", "yearly"}:
+        return "annual"
+    fiscal = str(fiscal_period or "").strip().upper()
+    if fiscal.startswith("Q"):
+        return "quarterly"
+    if fiscal.startswith("FY") or fiscal.startswith("A"):
+        return "annual"
+    return text
+
+
 def _ordered_symbols(symbols: Sequence[str]) -> List[str]:
     seen = set()
     ordered: List[str] = []
@@ -552,11 +751,14 @@ def _ensure_pandas_available() -> None:
 
 __all__ = [
     "CanonicalLoadResult",
+    "FundamentalsLoadResult",
     "build_feature_frames",
     "compute_canonical_health",
+    "compute_fundamentals_health",
     "compute_feature_health",
     "evaluate_thresholds",
     "load_canonical_equity_pandas",
+    "load_canonical_fundamentals_pandas",
     "run_data_health_preflight",
     "resolve_run_id",
 ]
