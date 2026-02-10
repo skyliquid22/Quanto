@@ -27,6 +27,7 @@ from research.datasets.canonical_equity_loader import build_union_calendar, load
 from research.eval.evaluate import EvalSeries, EvaluationMetadata, MetricConfig, evaluation_payload, from_rollout
 from research.envs.gym_weight_env import GymWeightTradingEnv
 from research.envs.signal_weight_env import SignalWeightEnvConfig, SignalWeightTradingEnv
+from research.execution.execution_simulator import attach_price_panel, resolve_execution_sim_config
 from research.features.feature_eng import (
     build_sma_feature_result,
     build_universe_feature_results,
@@ -70,6 +71,7 @@ _CONFIG_KEYS = {
     "policy_mode",
     "sigmoid_scale",
     "transaction_cost_bp",
+    "execution_sim",
     "checkpoint",
     "data_root",
     "out_dir",
@@ -238,6 +240,9 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
         sma_config,
         panel_regime_feature,
     ) = _build_feature_rows(symbols, slices, args, data_root, start, end)
+    execution_sim = resolve_execution_sim_config(getattr(args, "execution_sim", None))
+    if execution_sim and execution_sim.enabled:
+        rows = attach_price_panel(rows, slices, symbols)
     rows = _slice_rows_by_date(rows, eval_start, eval_end)
     if len(rows) < 2:
         raise SystemExit("Not enough aligned feature rows to evaluate.")
@@ -245,7 +250,11 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
     combined_hashes = dict(canonical_hashes)
     combined_hashes.update(feature_hashes)
 
-    env_config = SignalWeightEnvConfig(transaction_cost_bp=args.transaction_cost_bp, risk_config=risk_config)
+    env_config = SignalWeightEnvConfig(
+        transaction_cost_bp=args.transaction_cost_bp,
+        risk_config=risk_config,
+        execution_sim=execution_sim,
+    )
     policy_id, policy_details, rollout_series, inputs_used = _run_policy_rollout(
         args=args,
         symbols=symbols,
@@ -629,6 +638,7 @@ def _derive_run_id(
         "transaction_cost_bp": env_config.transaction_cost_bp,
         "policy": dict(policy_details),
         "risk_config": env_config.risk_config.to_dict(),
+        "execution_sim": env_config.execution_sim.to_dict() if env_config.execution_sim else None,
         "inputs_used": {key: inputs_used[key] for key in sorted(inputs_used)},
     }
     digest = hashlib.sha256(
@@ -678,6 +688,7 @@ def _build_rollout_metadata(
         "end_date": end.isoformat(),
         "transaction_cost_bp": env_config.transaction_cost_bp,
         "risk_config": env_config.risk_config.to_dict(),
+        "execution_sim": env_config.execution_sim.to_dict() if env_config.execution_sim else None,
         "feature_set": feature_set,
         "observation_columns": list(observation_columns),
         "sma_config": {

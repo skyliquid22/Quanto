@@ -25,6 +25,7 @@ from infra.normalization.lineage import compute_file_hash
 from research.datasets.canonical_equity_loader import build_union_calendar, load_canonical_equity
 from research.envs.gym_weight_env import GymWeightTradingEnv
 from research.envs.signal_weight_env import SignalWeightEnvConfig
+from research.execution.execution_simulator import attach_price_panel, resolve_execution_sim_config
 from research.features.feature_eng import build_universe_feature_results
 from research.features.feature_registry import (
     FeatureSetResult,
@@ -486,8 +487,15 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
     if len(rows) < 2:
         raise SystemExit("Not enough feature rows to train PPO.")
 
+    execution_sim = resolve_execution_sim_config(getattr(args, "execution_sim", None))
+    if execution_sim and execution_sim.enabled:
+        rows = attach_price_panel(rows, slices, symbols)
     risk_config = _build_risk_config(args)
-    env_config = SignalWeightEnvConfig(transaction_cost_bp=args.transaction_cost_bp, risk_config=risk_config)
+    env_config = SignalWeightEnvConfig(
+        transaction_cost_bp=args.transaction_cost_bp,
+        risk_config=risk_config,
+        execution_sim=execution_sim,
+    )
     train_rows = _slice_rows_by_date(rows, train_start, train_end)
     test_rows = _slice_rows_by_date(rows, test_start, test_end)
     if len(train_rows) < 2:
@@ -694,6 +702,7 @@ def build_train_report(
             "initial_cash": env_config.initial_cash,
             "transaction_cost_bp": env_config.transaction_cost_bp,
             "risk_config": env_config.risk_config.to_dict(),
+            "execution_sim": env_config.execution_sim.to_dict() if env_config.execution_sim else None,
         },
         "features": {
             "fast_window": sma_config.fast_window,
@@ -772,6 +781,7 @@ def build_eval_report(
             "initial_cash": env_config.initial_cash,
             "transaction_cost_bp": env_config.transaction_cost_bp,
             "risk_config": env_config.risk_config.to_dict(),
+            "execution_sim": env_config.execution_sim.to_dict() if env_config.execution_sim else None,
         },
         "features": {
             "fast_window": sma_config.fast_window,

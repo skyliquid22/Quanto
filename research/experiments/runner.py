@@ -216,6 +216,7 @@ def _run_training(spec: ExperimentSpec, data_root: Path, data_split: DataSplit) 
         run_id=spec.experiment_id,
         data_root=str(data_root),
         regime_feature_set=spec.regime_feature_set,
+        execution_sim=spec.execution_sim,
         vendor="polygon",
         live=False,
         ingest_mode="rest",
@@ -268,6 +269,7 @@ def _run_sac_training(spec: ExperimentSpec, data_root: Path, data_split: DataSpl
         run_id=spec.experiment_id,
         data_root=str(data_root),
         regime_feature_set=spec.regime_feature_set,
+        execution_sim=spec.execution_sim,
         vendor="polygon",
         live=False,
         ingest_mode="rest",
@@ -391,6 +393,7 @@ def _run_evaluation(
         data_root=str(data_root),
         out_dir=str(evaluation_dir),
         run_id=spec.experiment_id,
+        execution_sim=spec.execution_sim,
         train_start_date=data_split.train_start.isoformat(),
         train_end_date=data_split.train_end.isoformat(),
         test_start_date=data_split.test_start.isoformat(),
@@ -448,6 +451,7 @@ def _run_hierarchical_evaluation(
     env_config = SignalWeightEnvConfig(
         transaction_cost_bp=spec.cost_config.transaction_cost_bp,
         risk_config=spec.risk_config,
+        execution_sim=spec.execution_sim,
     )
     env = SignalWeightTradingEnv(rows, config=env_config, observation_columns=observation_columns)
     controller_cfg = ControllerConfig.from_mapping(spec.controller_config)

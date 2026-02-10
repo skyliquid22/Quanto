@@ -15,6 +15,7 @@ except Exception:  # pragma: no cover
 
 from research.risk import RiskConfig
 from research.features.feature_registry import normalize_regime_feature_set_name
+from research.execution.execution_simulator import ExecutionSimConfig, resolve_execution_sim_config
 from research.hierarchy.modes import ensure_mode_inventory, normalize_mode
 
 
@@ -68,6 +69,7 @@ class ExperimentSpec:
     seed: int
     evaluation_split: EvaluationSplitConfig | None = None
     risk_config: RiskConfig = RiskConfig()
+    execution_sim: ExecutionSimConfig | None = None
     notes: str | None = None
     regime_feature_set: str | None = None
     hierarchy_enabled: bool = False
@@ -106,6 +108,7 @@ class ExperimentSpec:
         cost_config = _build_cost_config(payload.get("cost_config"))
         evaluation_split = _build_evaluation_split(payload.get("evaluation_split"))
         risk_config = _build_risk_config(payload.get("risk_config"))
+        execution_sim = _build_execution_sim(payload.get("execution_sim"))
         seed = _coerce_int(payload.get("seed"), "seed")
         notes = payload.get("notes")
         normalized_notes = None
@@ -142,6 +145,7 @@ class ExperimentSpec:
             policy_params=policy_params,
             cost_config=cost_config,
             risk_config=risk_config,
+            execution_sim=execution_sim,
             seed=seed,
             evaluation_split=evaluation_split,
             notes=normalized_notes,
@@ -166,6 +170,7 @@ class ExperimentSpec:
             "policy_params": _canonicalize(self.policy_params),
             "cost_config": self.cost_config.to_dict(),
             "risk_config": self.risk_config.to_dict(),
+            "execution_sim": (self.execution_sim or ExecutionSimConfig()).to_dict(),
             "seed": int(self.seed),
             "evaluation_split": evaluation_split.to_dict(),
             "notes": self.notes or "",
@@ -194,6 +199,8 @@ class ExperimentSpec:
         if self.regime_feature_set is None:
             payload.pop("regime_feature_set", None)
         payload["evaluation_split"] = evaluation_split.to_dict()
+        if self.execution_sim is None:
+            payload.pop("execution_sim", None)
         if not self.hierarchy_enabled:
             payload.pop("hierarchy_enabled", None)
             payload.pop("controller_config", None)
@@ -366,6 +373,16 @@ def _build_evaluation_split(payload: Any) -> EvaluationSplitConfig | None:
     )
 
 
+def _build_execution_sim(payload: Any) -> ExecutionSimConfig | None:
+    if payload is None:
+        return None
+    if isinstance(payload, ExecutionSimConfig):
+        return payload
+    if not isinstance(payload, Mapping):
+        raise ValueError("execution_sim must be provided as a mapping when present.")
+    return resolve_execution_sim_config(payload)
+
+
 def _build_risk_config(payload: Any) -> RiskConfig:
     if payload is None:
         return RiskConfig()
@@ -401,4 +418,4 @@ def _sha256_hex(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-__all__ = ["CostConfig", "EvaluationSplitConfig", "ExperimentSpec", "RiskConfig"]
+__all__ = ["CostConfig", "EvaluationSplitConfig", "ExecutionSimConfig", "ExperimentSpec", "RiskConfig"]

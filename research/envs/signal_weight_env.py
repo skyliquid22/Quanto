@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import math
-from typing import Iterable, List, Mapping, MutableMapping, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
 
 from research.regime import RegimeState
+from research.execution.execution_simulator import ExecutionSimulator, ExecutionSimConfig
 from research.risk import RiskConfig, project_weights
 
 
@@ -19,6 +20,7 @@ class SignalWeightEnvConfig:
     transaction_cost_bp: float = 1.0
     action_clip: Tuple[float, float] = (0.0, 1.0)
     risk_config: RiskConfig = RiskConfig()
+    execution_sim: ExecutionSimConfig | None = None
 
     def __post_init__(self) -> None:
         low, high = self.action_clip
@@ -30,6 +32,8 @@ class SignalWeightEnvConfig:
             raise ValueError("action_clip upper bound cannot be less than lower bound")
         if not isinstance(self.risk_config, RiskConfig):
             raise TypeError("risk_config must be a RiskConfig instance")
+        if self.execution_sim is not None and not isinstance(self.execution_sim, ExecutionSimConfig):
+            raise TypeError("execution_sim must be an ExecutionSimConfig instance or None")
 
 
 class SignalWeightTradingEnv:
@@ -63,6 +67,9 @@ class SignalWeightTradingEnv:
         if not self._symbol_order:
             raise ValueError("at least one symbol is required to run the environment")
         self._num_assets = len(self._symbol_order)
+        self._execution_simulator: ExecutionSimulator | None = None
+        if self.config.execution_sim and self.config.execution_sim.enabled:
+            self._execution_simulator = ExecutionSimulator(self._symbol_order, self.config.execution_sim)
         self._portfolio_value: float = self.config.initial_cash
         self._current_weights: List[float] = [0.0 for _ in range(self._num_assets)]
         self._step_index: int = 0
@@ -104,6 +111,8 @@ class SignalWeightTradingEnv:
         self._step_index = 0
         self._done = False
         self._mode_timeline = []
+        if self._execution_simulator is not None:
+            self._execution_simulator.reset()
         return self._build_observation()
 
     def step(
@@ -111,6 +120,7 @@ class SignalWeightTradingEnv:
         action: float | Sequence[float],
         *,
         mode: str | None = None,
+        execution_action: Mapping[str, object] | None = None,
     ) -> Tuple[Tuple[float, ...], float, bool, Mapping[str, object]]:
         if self._done:
             raise RuntimeError("cannot step once the environment is done; call reset() first")
@@ -122,19 +132,38 @@ class SignalWeightTradingEnv:
         action_vector = self._prepare_action(action)
         target_weights = self._project_action(action_vector)
         prev_weights = list(self._current_weights)
-        trade_notional = [(target_weights[idx] - prev_weights[idx]) * prev_value for idx in range(self._num_assets)]
+
+        executed_weights = list(target_weights)
+        exec_info: Dict[str, object] = {}
+        if self._execution_simulator is not None:
+            price_panel = self._price_panel_for_row(row)
+            next_price_panel = self._price_panel_for_row(next_row)
+            exec_result = self._execution_simulator.resolve_step(
+                prev_weights=prev_weights,
+                target_weights=target_weights,
+                prev_value=prev_value,
+                price_panel=price_panel,
+                next_price_panel=next_price_panel,
+                execution_action=execution_action,
+            )
+            executed_weights = list(exec_result.executed_weights)
+            exec_info.update(exec_result.to_info())
+
+        trade_notional = [
+            (executed_weights[idx] - prev_weights[idx]) * prev_value for idx in range(self._num_assets)
+        ]
         cost_rate = self.config.transaction_cost_bp / 10_000.0
         cost_paid = sum(abs(value) * cost_rate for value in trade_notional)
         post_cost_value = prev_value - cost_paid
         pct_returns = self._compute_returns(row, next_row)
-        weighted_return = sum(target_weights[idx] * pct_returns[idx] for idx in range(self._num_assets))
+        weighted_return = sum(executed_weights[idx] * pct_returns[idx] for idx in range(self._num_assets))
         next_value = post_cost_value * (1.0 + weighted_return)
         if next_value <= 0:
             raise RuntimeError("portfolio value became non-positive; check inputs")
 
         reward = math.log(next_value / prev_value) if prev_value > 0 else 0.0
         self._portfolio_value = next_value
-        self._current_weights = list(target_weights)
+        self._current_weights = list(executed_weights)
         self._step_index += 1
         done = self._step_index >= len(self._rows) - 1
         self._done = done
@@ -142,17 +171,20 @@ class SignalWeightTradingEnv:
         price_payload = self._format_price_payload(row)
         target_payload = self._format_weight_payload(target_weights)
         raw_payload = self._format_weight_payload(action_vector)
+        realized_payload = self._format_weight_payload(executed_weights)
         info = {
             "timestamp": row["timestamp"],
             "price_close": price_payload,
             "raw_action": raw_payload,
             "weights": target_payload,
             "weight_target": target_payload,
-            "weight_realized": target_payload,
+            "weight_realized": realized_payload,
             "portfolio_value": next_value,
             "cost_paid": cost_paid,
             "reward": reward,
         }
+        if exec_info:
+            info.update(exec_info)
         regime_values = self._regime_vector(row)
         if regime_values:
             info["regime_features"] = regime_values
@@ -254,6 +286,26 @@ class SignalWeightTradingEnv:
         if self._num_assets == 1:
             return float(row["panel"][self._symbol_order[0]]["close"])
         return {symbol: float(row["panel"][symbol]["close"]) for symbol in self._symbol_order}
+
+    def _price_panel_for_row(self, row: Mapping[str, object]) -> Dict[str, Dict[str, float]]:
+        panel = row.get("price_panel")
+        if not isinstance(panel, Mapping):
+            raise ValueError("price_panel is required when execution_sim is enabled")
+        normalized: Dict[str, Dict[str, float]] = {}
+        for symbol in self._symbol_order:
+            entry = panel.get(symbol)
+            if not isinstance(entry, Mapping):
+                raise ValueError(f"price_panel missing OHLC for {symbol}")
+            try:
+                normalized[symbol] = {
+                    "open": float(entry["open"]),
+                    "high": float(entry["high"]),
+                    "low": float(entry["low"]),
+                    "close": float(entry["close"]),
+                }
+            except KeyError as exc:
+                raise ValueError(f"price_panel missing field {exc} for {symbol}") from exc
+        return normalized
 
     def _infer_regime_feature_names(self, rows: Sequence[Mapping[str, object]]) -> Tuple[str, ...]:
         for row in rows:
