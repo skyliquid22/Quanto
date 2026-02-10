@@ -1,0 +1,1 @@
+"""Quanto CLI wrapper package."""

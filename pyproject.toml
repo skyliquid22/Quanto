@@ -5,5 +5,8 @@ description = "Institutional-style end-to-end trade bot (FinRL-based)"
 authors = [{ name = "Ahmed Elshayeb" }]
 requires-python = ">=3.10"
 
+[project.scripts]
+quanto = "cli.app:app"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

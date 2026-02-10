@@ -253,6 +253,23 @@ export POLYGON_API_KEY=...
 export IVOLATILITY_API_KEY=...
 ```
 
+### CLI Wrapper (Typer)
+
+```bash
+export PYTHON=/usr/bin/python3
+pip install -r requirements.txt
+quanto --help
+quanto
+python -m cli.app
+```
+
+Minimal interactive example:
+```bash
+quanto
+doctor
+ingest -h
+```
+
 - **Ingest historical equity data (raw layer).**
 ```bash
 python -m scripts.ingest \

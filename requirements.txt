@@ -10,3 +10,4 @@ pyyaml
 stable-baselines3
 streamlit
 torch
+typer
