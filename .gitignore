@@ -28,4 +28,6 @@ scripts/readme.txt
 .ipynb_checkpoints/
 .DS_Store
 tmp/
+cache/
+tmpcache/
 notebooks/fundamentals_pipeline_smoke.ipynb
