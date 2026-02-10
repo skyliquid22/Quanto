@@ -213,10 +213,11 @@ class ExecutionSimulator:
 
         for idx, symbol in enumerate(self._symbols):
             current_weight = float(prev_weights[idx])
+            if current_weight > 0:
+                self._update_trailing_anchor(symbol, price_panel, current_weight)
             target_weight = float(target_weights[idx])
             delta = target_weight - current_weight
             if abs(delta) <= 1e-12:
-                self._update_trailing_anchor(symbol, price_panel, current_weight)
                 continue
 
             total_target_notional += abs(delta) * prev_value
@@ -260,7 +261,6 @@ class ExecutionSimulator:
 
             if not filled:
                 unfilled_notional += abs(delta) * prev_value
-                self._update_trailing_anchor(symbol, price_panel, current_weight)
                 continue
 
             executed[idx] = target_weight
@@ -362,6 +362,7 @@ class ExecutionSimulator:
         symbol: str,
         price_panel: Mapping[str, Mapping[str, float]],
         weight: float,
+        use_next: bool = False,
     ) -> None:
         if weight <= 0:
             self._trailing_anchor[symbol] = None
