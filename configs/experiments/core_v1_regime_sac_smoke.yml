@@ -1,0 +1,49 @@
+experiment_name: core_v1_regime_sac_smoke
+symbols:
+  - SPY
+  - QQQ
+  - IWM
+start_date: "2012-01-01"
+end_date: "2025-12-31"
+interval: "daily"
+
+feature_set: "core_v1_regime"
+regime_feature_set: "regime_v1_1"
+
+policy: "sac"
+policy_params:
+  timesteps: 10000
+  learning_rate: 0.0003
+  gamma: 0.99
+  buffer_size: 1000000
+  batch_size: 256
+  tau: 0.005
+  train_freq: 1
+  gradient_steps: 1
+  learning_starts: 1000
+  ent_coef: "auto"
+  target_entropy: "auto"
+  fast_window: 20
+  slow_window: 50
+
+evaluation_split:
+  train_ratio: 0.8
+  test_ratio: 0.2
+  test_window_months: null
+
+cost_config:
+  transaction_cost_bp: 1.0
+
+risk_config:
+  long_only: true
+  max_weight: 0.6
+  exposure_cap: 1.0
+  min_cash: 0.0
+  max_turnover_1d: 0.4
+
+hierarchy_enabled: false
+allocator_by_mode: {}
+controller_config: {}
+
+seed: 42
+notes: "SAC smoke run on core_v1_regime with the primary regime universe."
