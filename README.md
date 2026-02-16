@@ -239,6 +239,38 @@ evidence, not optimization.
 
 ---
 
+## Config Anatomy (Experiment Spec)
+
+Configs can be YAML or JSON. Below is an annotated YAML example.
+
+```yaml
+name: core_v1_regime_ppo_demo
+symbols: ["AAPL", "MSFT", "NVDA"]         # universe (1..50 typical)
+start_date: "2022-01-01"                  # inclusive
+end_date: "2025-12-31"                    # inclusive
+feature_set: core_v1_regime               # observation set
+regime_feature_set: regime_v1_1           # optional override
+
+evaluation_split:
+  train_ratio: 0.80                       # 0.5–0.9 typical
+  test_ratio: 0.20                        # 0.1–0.5 typical
+  test_window_months: 3                   # allowed: 1, 3, 4, 6, 12
+
+policy: ppo                               # ppo | sac | sma | equal_weight
+policy_params:
+  timesteps: 200000                       # 50k–2M typical
+  learning_rate: 3.0e-4                   # 1e-5–1e-3 typical
+  gamma: 0.99                             # 0.90–0.999
+  reward_version: reward_v2               # registered reward id
+  max_turnover_1d: 0.30                   # 0.05–0.50 typical
+
+execution:
+  enabled: true
+  default_order_type: market              # market | limit | stop_loss | trailing_stop
+```
+
+---
+
 ## Quickstart (Research Workflow)
 
 ```bash
