@@ -22,8 +22,21 @@ CommandHandler = Callable[[Sequence[str], CommandContext], CommandResult]
 
 
 @dataclass(frozen=True)
+class ParamSpec:
+    name: str
+    type: str
+    description: str
+    required: bool = False
+    default: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class CommandSpec:
     name: str
     description: str
     module: Optional[str] = None
     handler: Optional[CommandHandler] = None
+    usage: Optional[str] = None
+    params: Sequence[ParamSpec] = ()
+    returns: Optional[str] = None
+    example: Optional[str] = None

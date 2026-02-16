@@ -270,72 +270,75 @@ doctor
 ingest -h
 ```
 
-- **Ingest historical equity data (raw layer).**
-```bash
-python -m scripts.ingest \
-  --config configs/ingest/polygon_equity_backfill.yml \
-  --domain equity_ohlcv \
-  --mode rest
-```
-Output: raw Parquet + manifest under `.quanto_data/raw/polygon/equity_ohlcv/`.
+### CLI-First Workflows
 
-- **Reconcile vendors into canonical datasets.**
-```bash
-python -m scripts.build_canonical_datasets \
-  --start-date 2022-01-01 \
-  --end-date 2025-12-31
-```
-Output: canonical Parquet under `.quanto_data/canonical/equity_ohlcv/`.
+Within the `quanto` prompt, each command forwards to its underlying script. Use `-h` to view help:
 
-- **Run a PPO experiment from a spec.**
-```bash
-python -m scripts.run_experiment \
-  --spec configs/experiments/core_v1_regime_slices_ppo.json
+```text
+quanto> ingest -h
+ingest: Ingest raw vendor data into .quanto_data/raw using a config file.
+Usage:
+  ingest --config <path> --domain <domain> [--mode auto|rest|flat_file] [--run-id <id>] [--data-root <path>] [--force] [--dry-run]
+Parameters:
+  --config (path, required) - Ingestion config file (YAML or JSON).
+  --domain (str, required) - Domain to ingest (e.g., equity_ohlcv).
+  --mode (str, optional, default=auto) - Force ingestion mode (auto, rest, flat_file).
+  --run-id (str, optional) - Optional deterministic run id.
+  --data-root (path, optional) - Override QUANTO data root.
+  --force (flag, optional) - Overwrite existing manifest for run-id.
+  --dry-run (flag, optional) - Resolve routing and print summary without writing data.
+Returns:
+  JSON summary to stdout; raw files + manifest written under .quanto_data/raw/<vendor>/<domain>/.
+Example:
+  ingest --config configs/ingest/polygon_equity_backfill.yml --domain equity_ohlcv --mode rest
+Forwards to: python -m scripts.ingest
 ```
-Output: experiment artifacts under `.quanto_data/experiments/<EXPERIMENT_ID>/`.
 
-- **Compute regime-sliced metrics for governance decisions.**
-```bash
-python -m scripts.run_regime_slices --experiment-id <EXPERIMENT_ID>
+Example: ingest equities (raw layer) and view a typical JSON status:
+```text
+quanto> ingest --config configs/ingest/polygon_equity_backfill.yml --domain equity_ohlcv --mode rest
+{
+  "adapter": "PolygonEquityAdapter",
+  "config_path": "configs/ingest/polygon_equity_backfill.yml",
+  "domain": "equity_ohlcv",
+  "files_written": [
+    {"path": ".../AAPL/daily/2022.parquet", "records": 252}
+  ],
+  "manifest_path": ".../equity_ohlcv-<run_id>.json",
+  "mode": "rest",
+  "run_id": "equity_ohlcv-<run_id>",
+  "status": "succeeded",
+  "vendor": "polygon"
+}
 ```
-Output: `evaluation/regime_slices.json` inside the experiment folder.
 
-- **Qualify and promote (gated by hard/soft criteria).**
-```bash
-python -m scripts.qualify_experiment \
-  --experiment-id <EXPERIMENT_ID> \
-  --baseline <BASELINE_ID>
+Build canonical shards from raw inputs:
+```text
+quanto> build-canonical --start-date 2022-01-01 --end-date 2025-12-31 --domains equity_ohlcv
 ```
-```bash
-python -m scripts.promote_experiment \
-  --experiment-id <EXPERIMENT_ID> \
-  --tier candidate \
-  --reason "passes gates"
-```
-Output: `promotion/qualification_report.json` and promotion records.
 
-- **Shadow replay for deterministic execution evidence.**
-```bash
-python -m scripts.run_shadow \
-  --experiment-id <EXPERIMENT_ID> \
-  --replay \
-  --start-date 2024-01-01 \
-  --end-date 2024-12-31
+Run an experiment from a spec:
+```text
+quanto> run-experiment --spec configs/experiments/core_v1_regime_slices_ppo.json
 ```
-Output: replay artifacts under `.quanto_data/shadow/<EXPERIMENT_ID>/`.
 
-- **Data health report (coverage + NaN diagnostics).**
-```bash
-python -m scripts.report_data_health \
-  --domain equity_ohlcv \
-  --symbols AAPL MSFT NVDA \
-  --start-date 2022-01-01 \
-  --end-date 2025-12-31 \
-  --feature-set core_v1_regime
+Run a sweep (multi‑experiment grid):
+```text
+quanto> run-sweep --sweep configs/sweeps/core_v1_primary_regime_baselines.yml
 ```
-Output: JSON reports under `.quanto_data/monitoring/data_health/<run_id>/`.
 
-All experiments are driven by **explicit configuration files**, not ad-hoc scripts.
+Evaluate or shadow‑replay a trained model:
+```text
+quanto> evaluate --experiment-id <EXPERIMENT_ID>
+quanto> run-shadow --experiment-id <EXPERIMENT_ID> --replay --start-date 2024-01-01 --end-date 2024-12-31
+```
+
+Generate a user-facing report:
+```text
+quanto> monitor --experiment-id <EXPERIMENT_ID>
+```
+
+All experiments are driven by **explicit configuration files**, not ad-hoc flags.
 
 Output locations (default under `.quanto_data/`):
 - `experiments/<EXPERIMENT_ID>/evaluation/metrics.json`

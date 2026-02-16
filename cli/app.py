@@ -16,7 +16,7 @@ except Exception:  # pragma: no cover - Windows fallback
     readline = None  # type: ignore[assignment]
 
 from cli.commands.registry import COMMAND_SPECS
-from cli.commands.specs import CommandContext, CommandResult, CommandSpec
+from cli.commands.specs import CommandContext, CommandResult, CommandSpec, ParamSpec
 
 app = typer.Typer(add_completion=False)
 
@@ -95,10 +95,30 @@ def _run_command(spec: CommandSpec, args: Sequence[str], context: CommandContext
     return _run_python_module(spec, args, context)
 
 
+def _format_param(param: "ParamSpec") -> str:
+    required = "required" if param.required else "optional"
+    default = f", default={param.default}" if param.default is not None else ""
+    return f"  {param.name} ({param.type}, {required}{default}) - {param.description}"
+
+
 def _command_help(spec: CommandSpec) -> str:
+    lines = [f"{spec.name}: {spec.description}"]
+    if spec.usage:
+        lines.append("Usage:")
+        lines.append(f"  {spec.usage}")
+    if spec.params:
+        lines.append("Parameters:")
+        for param in spec.params:
+            lines.append(_format_param(param))
+    if spec.returns:
+        lines.append("Returns:")
+        lines.append(f"  {spec.returns}")
+    if spec.example:
+        lines.append("Example:")
+        lines.append(f"  {spec.example}")
     if spec.module:
-        return f"{spec.name}: {spec.description}\nForwards to: python -m {spec.module}"
-    return f"{spec.name}: {spec.description}"
+        lines.append(f"Forwards to: python -m {spec.module}")
+    return "\n".join(lines)
 
 
 def _handle_line(raw: str, context: CommandContext) -> None:

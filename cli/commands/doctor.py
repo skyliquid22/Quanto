@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Sequence
 
-from cli.commands.specs import CommandContext, CommandResult, CommandSpec
+from cli.commands.specs import CommandContext, CommandResult, CommandSpec, ParamSpec
 
 
 def _resolve_data_root(repo_root: Path) -> Path:
@@ -55,4 +55,8 @@ spec = CommandSpec(
     name="doctor",
     description="Check PYTHON env, repo root, and data root availability.",
     handler=run,
+    usage="doctor",
+    params=(),
+    returns="Pass/fail summary printed to stdout; non-zero exit code on failure.",
+    example="doctor",
 )

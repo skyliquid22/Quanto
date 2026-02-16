@@ -1,9 +1,49 @@
 from __future__ import annotations
 
-from cli.commands.specs import CommandSpec
+from cli.commands.specs import CommandSpec, ParamSpec
 
 spec = CommandSpec(
     name="evaluate",
     description="Evaluate a policy/checkpoint over a specified window.",
     module="scripts.evaluate_agent",
+    usage="evaluate --start-date YYYY-MM-DD --end-date YYYY-MM-DD [--config <path>] [--symbol <sym>] [--symbols <sym,...>] [--feature-set <name>] [--policy <name>] [--checkpoint <path>] [--out-dir <path>]",
+    params=(
+        ParamSpec("--config", "path", "Optional eval config (YAML or JSON)."),
+        ParamSpec("--symbol", "str", "Single symbol (default: AAPL).", default="AAPL"),
+        ParamSpec("--symbols", "str", "Universe symbols (comma separated, repeat flag)."),
+        ParamSpec("--start-date", "date", "Inclusive start date (YYYY-MM-DD).", required=True),
+        ParamSpec("--end-date", "date", "Inclusive end date (YYYY-MM-DD).", required=True),
+        ParamSpec("--train-start-date", "date", "Optional in-sample start date."),
+        ParamSpec("--train-end-date", "date", "Optional in-sample end date."),
+        ParamSpec("--test-start-date", "date", "Optional OOS start date."),
+        ParamSpec("--test-end-date", "date", "Optional OOS end date."),
+        ParamSpec("--train-ratio", "float", "Train ratio metadata override."),
+        ParamSpec("--test-ratio", "float", "Test ratio metadata override."),
+        ParamSpec("--test-window-months", "int", "Test window metadata override."),
+        ParamSpec("--interval", "str", "Bar interval (daily only in v1).", default="daily"),
+        ParamSpec("--feature-set", "str", "Feature set used for observations.", default="sma_v1"),
+        ParamSpec("--regime-feature-set", "str", "Override regime feature set."),
+        ParamSpec(
+            "--policy",
+            "str",
+            "Policy (equal_weight, sma, ppo, sac, or sac_* preset).",
+            default="equal_weight",
+        ),
+        ParamSpec("--fast-window", "int", "Fast SMA window for features.", default="20"),
+        ParamSpec("--slow-window", "int", "Slow SMA window for features.", default="50"),
+        ParamSpec("--policy-mode", "str", "SMA decision mode (hard or sigmoid).", default="hard"),
+        ParamSpec("--sigmoid-scale", "float", "Sigmoid scale for SMA policy.", default="5.0"),
+        ParamSpec("--transaction-cost-bp", "float", "Transaction cost in bps.", default="1.0"),
+        ParamSpec("--max-weight", "float", "Per-asset weight cap.", default="1.0"),
+        ParamSpec("--exposure-cap", "float", "Total exposure cap.", default="1.0"),
+        ParamSpec("--min-cash", "float", "Minimum cash allocation.", default="0.0"),
+        ParamSpec("--max-turnover-1d", "float", "Optional 1-day L1 turnover cap."),
+        ParamSpec("--allow-short", "flag", "Disable long-only projection."),
+        ParamSpec("--checkpoint", "path", "Policy checkpoint for PPO/SAC."),
+        ParamSpec("--data-root", "path", "Override QUANTO data root."),
+        ParamSpec("--out-dir", "path", "Destination directory for metrics.json."),
+        ParamSpec("--run-id", "str", "Run identifier override."),
+    ),
+    returns="JSON metrics payload to stdout; metrics.json written when --out-dir is provided.",
+    example="evaluate --symbols AAPL,MSFT --start-date 2022-01-01 --end-date 2022-12-31 --policy ppo --checkpoint <path>",
 )
