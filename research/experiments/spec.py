@@ -72,6 +72,7 @@ class ExperimentSpec:
     execution_sim: ExecutionSimConfig | None = None
     notes: str | None = None
     regime_feature_set: str | None = None
+    regime_labeling: str | None = None
     hierarchy_enabled: bool = False
     controller_config: Mapping[str, Any] | None = None
     allocator_by_mode: Mapping[str, Mapping[str, Any]] | None = None
@@ -119,6 +120,7 @@ class ExperimentSpec:
         normalized_regime = None
         if regime_feature_set:
             normalized_regime = normalize_regime_feature_set_name(str(regime_feature_set))
+        regime_labeling = _normalize_regime_labeling(payload.get("regime_labeling") or payload.get("regime_labeling_version"))
         hierarchy_enabled = bool(payload.get("hierarchy_enabled", False))
         controller_config = _normalize_mapping(payload.get("controller_config")) or None
         allocator_by_mode = _normalize_allocator_mapping(payload.get("allocator_by_mode")) or None
@@ -150,6 +152,7 @@ class ExperimentSpec:
             evaluation_split=evaluation_split,
             notes=normalized_notes,
             regime_feature_set=normalized_regime,
+            regime_labeling=regime_labeling,
             hierarchy_enabled=hierarchy_enabled,
             controller_config=controller_config,
             allocator_by_mode=allocator_by_mode,
@@ -178,6 +181,8 @@ class ExperimentSpec:
             "controller_config": _canonicalize(self.controller_config or {}),
             "allocator_by_mode": _canonicalize(self.allocator_by_mode or {}),
         }
+        if self.regime_labeling is not None:
+            payload["regime_labeling"] = self.regime_labeling
         return payload
 
     @property
@@ -198,6 +203,8 @@ class ExperimentSpec:
             payload.pop("notes", None)
         if self.regime_feature_set is None:
             payload.pop("regime_feature_set", None)
+        if self.regime_labeling is None:
+            payload.pop("regime_labeling", None)
         payload["evaluation_split"] = evaluation_split.to_dict()
         if self.execution_sim is None:
             payload.pop("execution_sim", None)
@@ -224,6 +231,17 @@ def _require_str(payload: Mapping[str, Any], key: str) -> str:
     if not string_value:
         raise ValueError(f"{key} must be a non-empty string.")
     return string_value
+
+
+def _normalize_regime_labeling(value: object | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    if normalized not in {"v1", "v2"}:
+        raise ValueError("regime_labeling must be one of: v1, v2")
+    return normalized
 
 
 def _coerce_int(value: Any, label: str) -> int:

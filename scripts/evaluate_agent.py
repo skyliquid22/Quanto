@@ -122,6 +122,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--feature-set", default="sma_v1", help="Feature set used for observations.")
     parser.add_argument("--regime-feature-set", help="Override regime feature set for panel construction.")
     parser.add_argument(
+        "--regime-labeling",
+        choices=["v1", "v2"],
+        help="Regime labeling version (v1=window quantiles, v2=absolute thresholds).",
+    )
+    parser.add_argument(
         "--policy",
         default="equal_weight",
         help="Policy to evaluate (equal_weight, sma, ppo, sac, or sac_* preset).",
@@ -174,6 +179,10 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
     data_root = resolve_data_root(args.data_root)
     os.environ["QUANTO_DATA_ROOT"] = str(data_root)
     risk_config = _build_risk_config(args)
+    regime_labeling = str(getattr(args, "regime_labeling", "") or "").strip().lower()
+    if regime_labeling and regime_labeling not in {"v1", "v2"}:
+        raise SystemExit("regime-labeling must be one of: v1, v2")
+    thresholds_path = "configs/regime_thresholds.yml" if regime_labeling == "v2" else None
 
     auto_build = len(symbols) > 1
     ensure_yearly_daily_coverage(
@@ -303,7 +312,11 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
         feature_set=feature_set_name,
         policy_id=policy_id,
         run_id=run_id,
-        regime_metadata=resolve_regime_metadata(panel_regime_feature),
+        regime_metadata=resolve_regime_metadata(
+            panel_regime_feature,
+            labeling_version=regime_labeling or None,
+            thresholds_path=thresholds_path,
+        ),
         policy_details=policy_details,
         data_split=data_split,
     )
@@ -311,7 +324,11 @@ def run_evaluation(args: argparse.Namespace) -> Dict[str, Any]:
         rollout_series,
         metadata,
         inputs_used=inputs_used,
-        config=MetricConfig(risk_config=risk_config),
+        config=MetricConfig(
+            risk_config=risk_config,
+            regime_labeling_version=regime_labeling or "v1",
+            regime_thresholds_path=thresholds_path,
+        ),
     )
     out_dir = Path(args.out_dir) if args.out_dir else data_root / "monitoring" / "eval"
     out_dir.mkdir(parents=True, exist_ok=True)

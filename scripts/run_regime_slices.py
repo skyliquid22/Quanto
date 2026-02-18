@@ -57,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         print("No regime series available; wrote timeseries.json only.", file=sys.stderr)
         return 0
 
+    labeling_version, thresholds_path = _extract_regime_labeling(regime_payload)
     result = compute_regime_slices(
         regime_series=regime_payload.get("series"),
         feature_names=regime_payload.get("feature_names"),
@@ -65,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
         turnover_by_step=timeseries.get("turnover_by_step", []),
         annualization_days=252,
         float_precision=6,
+        labeling_version=labeling_version,
+        thresholds_path=thresholds_path,
     )
     if result is None:
         print("Unable to compute regime slices for this experiment.", file=sys.stderr)
@@ -114,6 +117,15 @@ def _parse_date(value: object) -> date | None:
     if isinstance(value, str):
         return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
     return None
+
+
+def _extract_regime_labeling(regime_payload: Mapping[str, object]) -> tuple[str | None, str | None]:
+    metadata = regime_payload.get("metadata") if isinstance(regime_payload, Mapping) else None
+    if not isinstance(metadata, Mapping):
+        return None, None
+    labeling = metadata.get("labeling_version") or metadata.get("labeling")
+    thresholds_path = metadata.get("thresholds_file")
+    return (str(labeling) if labeling else None, str(thresholds_path) if thresholds_path else None)
 
 
 def _slice_timeseries(timeseries: Mapping[str, object], start: date, end: date) -> Dict[str, object]:

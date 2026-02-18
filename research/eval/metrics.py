@@ -26,6 +26,8 @@ class MetricConfig:
     float_precision: int = _DEFAULT_PRECISION
     turnover_tolerance: float = 1e-12
     risk_config: RiskConfig | None = None
+    regime_labeling_version: str = "v1"
+    regime_thresholds_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,8 @@ def compute_metric_bundle(
         turnover_by_step=turnover_by_step,
         annualization_days=cfg.annualization_days,
         float_precision=cfg.float_precision,
+        labeling_version=cfg.regime_labeling_version,
+        thresholds_path=cfg.regime_thresholds_path,
     )
     return MetricResult(
         performance=perf,

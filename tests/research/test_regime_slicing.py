@@ -55,3 +55,49 @@ def test_regime_slicing_handles_duplicate_values():
     low_metrics = result.performance_by_regime["low_vol"]
     assert low_metrics["avg_exposure"] == 0.2
     assert low_metrics["total_return"] > 0
+
+
+def test_regime_slicing_v1_snapshot():
+    regime_series = [[0.1], [0.2], [0.3], [0.4]]
+    returns = [0.0, 0.0, 0.0]
+    exposures = [0.1, 0.2, 0.3, 0.4]
+    turnover = [0.0, 0.0, 0.0, 0.0]
+    result = compute_regime_slices(
+        regime_series,
+        ("market_vol_20d",),
+        returns=returns,
+        exposures=exposures,
+        turnover_by_step=turnover,
+        annualization_days=252,
+        float_precision=6,
+    )
+    assert result is not None
+    expected_metadata = {"signal": "market_vol_20d", "quantiles": {"q33": 0.199, "q66": 0.298}}
+    expected_performance = {
+        "low_vol": {
+            "total_return": 0.0,
+            "max_drawdown": 0.0,
+            "volatility_ann": 0.0,
+            "avg_exposure": 0.1,
+            "avg_turnover": 0.0,
+            "sharpe": None,
+        },
+        "mid_vol": {
+            "total_return": 0.0,
+            "max_drawdown": 0.0,
+            "volatility_ann": 0.0,
+            "avg_exposure": 0.2,
+            "avg_turnover": 0.0,
+            "sharpe": None,
+        },
+        "high_vol": {
+            "total_return": 0.0,
+            "max_drawdown": 0.0,
+            "volatility_ann": 0.0,
+            "avg_exposure": 0.35,
+            "avg_turnover": 0.0,
+            "sharpe": None,
+        },
+    }
+    assert result.metadata == expected_metadata
+    assert result.performance_by_regime == expected_performance

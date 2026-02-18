@@ -1,0 +1,36 @@
+version: v2
+universe:
+  - SPY
+  - QQQ
+  - IWM
+reference_window:
+  start_date: "2005-01-01"
+  end_date: "2025-12-31"
+features:
+  market_vol_20d:
+    method: percentile
+    p_high: 0.90
+  market_trend_20d:
+    method: deadzone
+    deadzone: 0.002
+thresholds:
+  market_vol_20d:
+    high: 0.0123
+  market_trend_20d:
+    deadzone: 0.002
+bucket_distribution:
+  high_vol_trend_up: 0.08
+  high_vol_trend_down: 0.07
+  high_vol_flat: 0.05
+  low_vol_trend_up: 0.35
+  low_vol_trend_down: 0.18
+  low_vol_flat: 0.27
+recompute_policy:
+  mode: manual
+  annual_month: 1
+  drift_check:
+    window_days: 252
+    ks_threshold: 0.10
+metadata:
+  computed_at: "2026-02-18"
+  computed_by: "scripts/build_regime_thresholds.py"

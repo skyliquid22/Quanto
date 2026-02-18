@@ -6,7 +6,7 @@ spec = CommandSpec(
     name="evaluate",
     description="Evaluate a policy/checkpoint over a specified window.",
     module="scripts.evaluate_agent",
-    usage="evaluate --start-date YYYY-MM-DD --end-date YYYY-MM-DD [--config <path>] [--symbol <sym>] [--symbols <sym,...>] [--feature-set <name>] [--policy <name>] [--checkpoint <path>] [--out-dir <path>]",
+    usage="evaluate --start-date YYYY-MM-DD --end-date YYYY-MM-DD [--config <path>] [--symbol <sym>] [--symbols <sym,...>] [--feature-set <name>] [--regime-labeling v1|v2] [--policy <name>] [--checkpoint <path>] [--out-dir <path>]",
     params=(
         ParamSpec("--config", "path", "Optional eval config (YAML or JSON)."),
         ParamSpec("--symbol", "str", "Single symbol (default: AAPL).", default="AAPL"),
@@ -23,6 +23,7 @@ spec = CommandSpec(
         ParamSpec("--interval", "str", "Bar interval (daily only in v1).", default="daily"),
         ParamSpec("--feature-set", "str", "Feature set used for observations.", default="sma_v1"),
         ParamSpec("--regime-feature-set", "str", "Override regime feature set."),
+        ParamSpec("--regime-labeling", "str", "Regime labeling version (v1 or v2)."),
         ParamSpec(
             "--policy",
             "str",

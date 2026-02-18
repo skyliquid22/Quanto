@@ -383,6 +383,7 @@ def _run_evaluation(
         interval=spec.interval,
         feature_set=spec.feature_set,
         regime_feature_set=spec.regime_feature_set,
+        regime_labeling=spec.regime_labeling,
         policy=policy_kind,
         fast_window=fast_window,
         slow_window=slow_window,
@@ -444,7 +445,14 @@ def _run_hierarchical_evaluation(
     ) = _build_hierarchical_rows(spec, slices, data_root)
     normalized_feature_set = normalize_feature_set_name(spec.feature_set)
     regime_for_panel = spec.regime_feature_set or default_regime_for_feature_set(normalized_feature_set)
-    regime_metadata = resolve_regime_metadata(regime_for_panel)
+    thresholds_path = None
+    if spec.regime_labeling == "v2":
+        thresholds_path = str(Path("configs/regime_thresholds.yml"))
+    regime_metadata = resolve_regime_metadata(
+        regime_for_panel,
+        labeling_version=spec.regime_labeling,
+        thresholds_path=thresholds_path,
+    )
     rows = _slice_rows_by_date(rows, data_split.test_start, data_split.test_end)
     if len(rows) < 2:
         raise ValueError("Not enough aligned feature rows in the test window for hierarchical evaluation.")
@@ -513,7 +521,11 @@ def _run_hierarchical_evaluation(
         series,
         metadata,
         inputs_used=ordered_inputs,
-        config=MetricConfig(risk_config=spec.risk_config),
+        config=MetricConfig(
+            risk_config=spec.risk_config,
+            regime_labeling_version=spec.regime_labeling or "v1",
+            regime_thresholds_path=thresholds_path,
+        ),
     )
     metrics_path = evaluation_dir / "metrics.json"
     metrics_path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")

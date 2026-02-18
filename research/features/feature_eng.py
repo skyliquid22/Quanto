@@ -404,7 +404,12 @@ def build_universe_feature_results(
     return results
 
 
-def resolve_regime_metadata(regime_feature_set: str | None) -> Dict[str, object] | None:
+def resolve_regime_metadata(
+    regime_feature_set: str | None,
+    *,
+    labeling_version: str | None = None,
+    thresholds_path: str | None = None,
+) -> Dict[str, object] | None:
     """Describe regime feature inputs for downstream metadata artifacts."""
 
     if not regime_feature_set:
@@ -413,6 +418,10 @@ def resolve_regime_metadata(regime_feature_set: str | None) -> Dict[str, object]
     payload: Dict[str, object] = {"feature_set": normalized}
     if normalized == "regime_v1_1":
         payload["universe"] = list(PRIMARY_REGIME_UNIVERSE)
+    if labeling_version:
+        payload["labeling_version"] = str(labeling_version)
+    if thresholds_path:
+        payload["thresholds_file"] = str(thresholds_path)
     return payload
 
 
