@@ -279,6 +279,18 @@ class ReconciliationBuilder:
             run_id=run_id,
         )
 
+    def _run_insiders(self, *, domain: str, cfg: Mapping[str, Any], start: date, end: date, run_id: str) -> Dict[str, Any]:
+        vendor_priority = self._resolve_vendor_priority(cfg)
+        vendor_data = self._load_insider_snapshots(vendor_priority, start, end)
+        return self._materialize_insiders_canonical(
+            domain=domain,
+            vendor_priority=vendor_priority,
+            vendor_data=vendor_data,
+            start=start,
+            end=end,
+            run_id=run_id,
+        )
+
     def _run_generic_domain(
         self,
         *,
@@ -1007,6 +1019,178 @@ class ReconciliationBuilder:
             year, month, day = iso_day.split("-")
             path = self.canonical_root / "fundamentals" / symbol / year / month / f"{day}.parquet"
             ordered = sorted(entries, key=lambda item: (item.get("statement_type"), item.get("filing_id")))
+            result = write_parquet_atomic(ordered, path)
+            outputs.append({"path": str(path), "file_hash": result["file_hash"], "records": len(ordered)})
+        outputs.sort(key=lambda item: item["path"])
+        return outputs
+
+    # ------------------------------------------------------------------
+    # Insider trades reconciliation
+    # ------------------------------------------------------------------
+
+    def _load_insider_snapshots(
+        self,
+        vendor_priority: Sequence[str],
+        start: date,
+        end: date,
+    ) -> Dict[str, VendorSnapshot]:
+        snapshots: Dict[str, VendorSnapshot] = {}
+        manifests = self._load_manifests("insider_trades")
+        for vendor in vendor_priority:
+            manifest = manifests.get(vendor)
+            if not manifest:
+                continue
+            vendor_root = self.raw_data_root / vendor / "insider_trades"
+            if not vendor_root.exists():
+                continue
+            files: List[Dict[str, Any]] = []
+            records: Dict[tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+            for file_path in vendor_root.glob("*/*/*/*.parquet"):
+                partition_day = self._parse_simple_partition(file_path)
+                if not partition_day or not (start <= partition_day <= end):
+                    continue
+                symbol = file_path.parents[3].name
+                raw_records = self._read_records(file_path)
+                file_hash = compute_file_hash(file_path)
+                files.append({"path": str(file_path), "file_hash": file_hash, "records": len(raw_records)})
+                for row in raw_records:
+                    normalized = dict(row)
+                    normalized["symbol"] = str(
+                        normalized.get("symbol") or normalized.get("ticker") or symbol
+                    )
+                    filing_date = self._normalize_date(normalized.get("filing_date"))
+                    transaction_date = self._normalize_date(normalized.get("transaction_date"))
+                    canonical_text = filing_date or transaction_date or partition_day.isoformat()
+                    if not canonical_text:
+                        continue
+                    canonical_day = date.fromisoformat(canonical_text)
+                    if not (start <= canonical_day <= end):
+                        continue
+                    normalized["filing_date"] = filing_date
+                    normalized["transaction_date"] = transaction_date
+                    normalized["canonical_date"] = canonical_text
+                    normalized["source_vendor"] = vendor
+                    normalized["__input_file_hash"] = file_hash
+                    normalized["__partition_day"] = partition_day.isoformat()
+                    key = (normalized["symbol"], normalized["canonical_date"])
+                    records[key].append(normalized)
+            if records:
+                snapshots[vendor] = VendorSnapshot(manifest=manifest, records_by_key=records, files=files)
+        return snapshots
+
+    def _materialize_insiders_canonical(
+        self,
+        *,
+        domain: str,
+        vendor_priority: Sequence[str],
+        vendor_data: Mapping[str, VendorSnapshot],
+        start: date,
+        end: date,
+        run_id: str,
+    ) -> Dict[str, Any]:
+        if not vendor_data:
+            metrics = DomainMetrics(domain=domain, run_id=run_id)
+            metrics_path = self._write_metrics(metrics)
+            return self._persist_manifest(
+                domain=domain,
+                run_id=run_id,
+                start=start,
+                end=end,
+                records_written=0,
+                vendor_priority=vendor_priority,
+                vendor_usage={},
+                inputs=[],
+                outputs=[],
+                metrics=metrics_path,
+                lineage_metadata={},
+            )
+
+        all_keys = set()
+        for snapshot in vendor_data.values():
+            all_keys.update(snapshot.records_by_key.keys())
+        ordered_keys = sorted(all_keys)
+        selected_records: List[Dict[str, Any]] = []
+        vendor_usage: MutableMapping[str, int] = defaultdict(int)
+        missing_primary = 0
+        fallback_count = 0
+        primary_vendor = vendor_priority[0] if vendor_priority else None
+        for key in ordered_keys:
+            candidates: List[tuple[str, List[Dict[str, Any]]]] = []
+            for vendor in vendor_priority:
+                snapshot = vendor_data.get(vendor)
+                if not snapshot:
+                    continue
+                rows = snapshot.records_by_key.get(key)
+                if rows:
+                    candidates.append((vendor, rows))
+            if not candidates:
+                continue
+            chosen_vendor, rows = candidates[0]
+            if primary_vendor and chosen_vendor != primary_vendor:
+                missing_primary += 1
+            method = "primary" if chosen_vendor == primary_vendor else "fallback"
+            manifest = vendor_data[chosen_vendor].manifest
+            for row in rows:
+                enriched = self._attach_metadata(
+                    row,
+                    manifest=manifest,
+                    method=method,
+                    primary_vendor=primary_vendor or chosen_vendor,
+                    selected_vendor=chosen_vendor,
+                )
+                selected_records.append(enriched)
+                vendor_usage[chosen_vendor] += 1
+                if method == "fallback":
+                    fallback_count += 1
+
+        metrics = DomainMetrics(domain=domain, run_id=run_id)
+        metrics.total_records = len(selected_records)
+        metrics.fallback_count = fallback_count
+        if metrics.total_records:
+            metrics.percent_missing_primary = missing_primary / max(len(ordered_keys), 1)
+            metrics.fallback_usage_rate = fallback_count / metrics.total_records
+
+        outputs = self._write_insiders_outputs(selected_records)
+        inputs = self._build_lineage_inputs(domain=domain, vendor_data=vendor_data)
+        metrics_path = self._write_metrics(metrics)
+        lineage_metadata = {
+            "missing_primary_symbols": missing_primary,
+            "fallback_records": fallback_count,
+            "manifest_paths": self._manifest_path_map(vendor_data),
+        }
+        return self._persist_manifest(
+            domain=domain,
+            run_id=run_id,
+            start=start,
+            end=end,
+            records_written=len(selected_records),
+            vendor_priority=vendor_priority,
+            vendor_usage=dict(vendor_usage),
+            inputs=inputs,
+            outputs=outputs,
+            metrics=metrics_path,
+            lineage_metadata=lineage_metadata,
+        )
+
+    def _write_insiders_outputs(self, records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+        grouped: MutableMapping[tuple[str, str], List[Mapping[str, Any]]] = defaultdict(list)
+        for record in records:
+            symbol = str(record["symbol"])
+            iso_day = str(record.get("canonical_date") or record.get("filing_date") or record.get("transaction_date"))[:10]
+            if not iso_day:
+                continue
+            grouped[(symbol, iso_day)].append(record)
+        outputs: List[Dict[str, Any]] = []
+        for (symbol, iso_day), entries in grouped.items():
+            year, month, day = iso_day.split("-")
+            path = self.canonical_root / "insiders" / symbol / year / month / f"{day}.parquet"
+            ordered = sorted(
+                entries,
+                key=lambda item: (
+                    str(item.get("transaction_date") or ""),
+                    str(item.get("name") or item.get("issuer") or ""),
+                ),
+            )
             result = write_parquet_atomic(ordered, path)
             outputs.append({"path": str(path), "file_hash": result["file_hash"], "records": len(ordered)})
         outputs.sort(key=lambda item: item["path"])

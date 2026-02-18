@@ -252,7 +252,6 @@ class FinancialDatasetsRawPipeline:
         "company_facts",
         "financial_metrics",
         "financial_metrics_snapshot",
-        "insider_trades",
         "institutional_ownership",
         "news",
     }
@@ -370,10 +369,6 @@ class FinancialDatasetsRawPipeline:
             result = await self.adapter.fetch_financial_statements_rest(request.symbols, period=period, limit=limit)
             await self.adapter.aclose()
             return result
-        if request.domain == "insider_trades":
-            result = await self.adapter.fetch_insider_trades_rest(request.symbols, limit=limit)
-            await self.adapter.aclose()
-            return result
         if request.domain == "institutional_ownership":
             result = await self.adapter.fetch_institutional_ownership_rest(
                 request.symbols,
@@ -405,8 +400,6 @@ class FinancialDatasetsRawPipeline:
             return self.raw_writer.write_financial_metrics_snapshot(vendor, records)
         if domain == "financial_statements":
             return self.raw_writer.write_financial_statements(vendor, records)
-        if domain == "insider_trades":
-            return self.raw_writer.write_insider_trades(vendor, records)
         if domain == "institutional_ownership":
             return self.raw_writer.write_institutional_ownership(vendor, records)
         if domain == "news":

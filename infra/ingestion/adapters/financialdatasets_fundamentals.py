@@ -137,10 +137,15 @@ class FinancialDatasetsAdapter:
         symbols: Sequence[str],
         *,
         limit: int | None,
+        filing_date_filters: Mapping[str, date | str] | None = None,
     ) -> FinancialDatasetsAdapterResult:
         return await self._fetch_per_symbol(
             symbols,
-            lambda symbol: self._fetch_insider_trades(symbol, limit=limit),
+            lambda symbol: self._fetch_insider_trades(
+                symbol,
+                limit=limit,
+                filing_date_filters=filing_date_filters,
+            ),
         )
 
     async def fetch_institutional_ownership_rest(
@@ -267,11 +272,14 @@ class FinancialDatasetsAdapter:
         symbol: str,
         *,
         limit: int | None,
+        filing_date_filters: Mapping[str, date | str] | None = None,
     ) -> FinancialDatasetsAdapterResult:
         params = {"ticker": symbol}
-        capped = _cap_limit(limit, _MAX_LIMITS["institutional_ownership"])
+        capped = _cap_limit(limit, _MAX_LIMITS["insider_trades"])
         if capped:
             params["limit"] = str(capped)
+        if filing_date_filters:
+            params.update(_normalize_filing_date_filters(filing_date_filters))
         payload = await self.rest_client.get("/insider-trades", params=params)
         records = _normalize_list_payload(symbol, payload, "insider_trades", vendor=self.vendor)
         return _result_from_payload("insider_trades", payload, records)
@@ -289,7 +297,7 @@ class FinancialDatasetsAdapter:
             params["report_period_gte"] = start_date.isoformat()
         if end_date:
             params["report_period_lte"] = end_date.isoformat()
-        capped = _cap_limit(limit, _MAX_LIMITS["insider_trades"])
+        capped = _cap_limit(limit, _MAX_LIMITS["institutional_ownership"])
         if capped:
             params["limit"] = str(capped)
         payload = await self.rest_client.get("/institutional-ownership", params=params)
@@ -517,6 +525,21 @@ def _normalize_list_payload(
         record["ingest_ts"] = _ingest_ts()
         records.append(record)
     return records
+
+
+def _normalize_filing_date_filters(filters: Mapping[str, date | str]) -> Dict[str, str]:
+    allowed = {"filing_date_lte", "filing_date_lt", "filing_date_gte", "filing_date_gt"}
+    normalized: Dict[str, str] = {}
+    for key, value in filters.items():
+        if key not in allowed or value is None:
+            continue
+        if isinstance(value, date):
+            normalized[key] = value.isoformat()
+        else:
+            text = str(value).strip()
+            if text:
+                normalized[key] = text
+    return normalized
 
 
 def _resolve_as_of_date(candidate: date | None) -> date:

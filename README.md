@@ -344,6 +344,24 @@ quanto> ingest --config configs/ingest/polygon_equity_backfill.yml --domain equi
 }
 ```
 
+Example: ingest insider trades (dedicated pipeline):
+```text
+quanto> ingest-insiders --config configs/ingest/financialdatasets_insider_smoke.yml --run-id insider_trades-smoke
+{
+  "adapter": "FinancialDatasetsAdapter",
+  "config_path": "configs/ingest/financialdatasets_insider_smoke.yml",
+  "domain": "insider_trades",
+  "files_written": [
+    {"path": ".../insider_trades/AAPL/2023/12/31.parquet", "records": 100}
+  ],
+  "manifest_path": ".../insider_trades-smoke.json",
+  "mode": "rest",
+  "run_id": "insider_trades-smoke",
+  "status": "succeeded",
+  "vendor": "financialdatasets"
+}
+```
+
 Build canonical shards from raw inputs:
 ```text
 quanto> build-canonical --start-date 2022-01-01 --end-date 2025-12-31 --domains equity_ohlcv

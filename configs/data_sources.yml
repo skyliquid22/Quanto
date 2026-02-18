@@ -51,3 +51,5 @@ reconciliation:
       vendor_priority: [factset, sec, financialdatasets]
       fundamentals_of_record: factset
       allow_fallback: true
+    insiders:
+      vendor_priority: [financialdatasets]

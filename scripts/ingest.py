@@ -56,7 +56,6 @@ SUPPORTED_DOMAINS = {
     "company_facts",
     "financial_metrics",
     "financial_metrics_snapshot",
-    "insider_trades",
     "institutional_ownership",
     "news",
     "option_contract_reference",
@@ -70,7 +69,6 @@ FINANCIALDATASETS_RAW_DOMAINS = {
     "company_facts",
     "financial_metrics",
     "financial_metrics_snapshot",
-    "insider_trades",
     "institutional_ownership",
     "news",
 }

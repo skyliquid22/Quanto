@@ -103,3 +103,28 @@ def test_company_facts_includes_as_of_date():
     record = result.records[0]
     assert record["symbol"] == "AAPL"
     assert record["as_of_date"] == "2024-01-05"
+
+
+def test_insider_trades_supports_filing_date_filters():
+    payload = {"insider_trades": [{"ticker": "AAPL", "transaction_date": "2023-12-25"}]}
+    client = _FakeRESTClient([payload])
+    adapter = FinancialDatasetsAdapter(rest_client=client)
+
+    result = asyncio.run(
+        adapter.fetch_insider_trades_rest(
+            symbols=("AAPL",),
+            limit=50,
+            filing_date_filters={
+                "filing_date_gte": date(2023, 1, 1),
+                "filing_date_lt": "2024-01-01",
+            },
+        )
+    )
+
+    assert result.records
+    call = client.calls[0]
+    assert call["path"] == "/insider-trades"
+    assert call["params"]["ticker"] == "AAPL"
+    assert call["params"]["limit"] == "50"
+    assert call["params"]["filing_date_gte"] == "2023-01-01"
+    assert call["params"]["filing_date_lt"] == "2024-01-01"

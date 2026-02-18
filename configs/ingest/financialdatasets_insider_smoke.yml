@@ -1,0 +1,11 @@
+vendor: financialdatasets
+symbols:
+  - AAPL
+  - MSFT
+options:
+  limit: 100
+  filing_date_gte: 2023-01-01
+  filing_date_lt: 2024-01-01
+financialdatasets:
+  rest:
+    timeout: 30
