@@ -98,14 +98,14 @@ def test_insider_intensity_percentile(monkeypatch):
     dates = equity["timestamp"].dt.normalize()
 
     records = []
-    # build 25 historical 30-session blocks with value=1000
+    # build 25 historical 30-session blocks with value above min threshold (0.1% ADV = 100k)
     for block in range(25):
         idx = 19 + block * 30
         records.append(
             {
                 "filing_date": dates.iloc[idx],
                 "transaction_date": dates.iloc[idx],
-                "transaction_value": 1000.0,
+                "transaction_value": 200_000.0,
                 "transaction_shares": 10.0,
                 "shares_owned_before_transaction": 1000.0,
                 "shares_owned_after_transaction": 1010.0,
@@ -120,7 +120,7 @@ def test_insider_intensity_percentile(monkeypatch):
         {
             "filing_date": dates.iloc[775],
             "transaction_date": dates.iloc[775],
-            "transaction_value": 2000.0,
+            "transaction_value": 400_000.0,
             "transaction_shares": 10.0,
             "shares_owned_before_transaction": 1000.0,
             "shares_owned_after_transaction": 1010.0,
