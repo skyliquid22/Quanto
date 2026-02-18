@@ -8,7 +8,7 @@ import pytest
 
 from infra.normalization import ReconciliationBuilder
 from infra.normalization.lineage import compute_file_hash
-from infra.storage.parquet import _PARQUET_AVAILABLE, write_parquet_atomic
+from infra.storage.parquet import _PARQUET_AVAILABLE
 
 pytestmark = pytest.mark.skipif(not _PARQUET_AVAILABLE, reason="pyarrow is required for reconciliation tests")
 
@@ -39,7 +39,7 @@ def test_insider_trades_raw_can_canonicalize(tmp_path: Path):
     canonical_root = tmp_path / "canonical"
     metrics_root = tmp_path / "metrics"
 
-    raw_path = raw_root / "financialdatasets" / "insider_trades" / "AAPL" / "2023" / "01" / "03.parquet"
+    raw_path = raw_root / "financialdatasets" / "insider_trades" / "AAPL" / "2023.csv"
     record = {
         "symbol": "AAPL",
         "filing_date": date(2023, 1, 3),
@@ -48,7 +48,9 @@ def test_insider_trades_raw_can_canonicalize(tmp_path: Path):
         "transaction_value": 1000.0,
         "source_vendor": "financialdatasets",
     }
-    write_parquet_atomic([record], raw_path)
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    import pandas as pd
+    pd.DataFrame([record]).to_csv(raw_path, index=False)
 
     _write_manifest(
         manifest_root,

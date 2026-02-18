@@ -15,11 +15,16 @@ import sys
 from infra.paths import get_data_root, get_repo_root, raw_root, validation_manifest_root
 from infra.storage.parquet import write_parquet_atomic
 from infra.storage.parquet_writer import merge_write_parquet, write_normalized_parquet
+from infra.storage.financialdatasets_policy import extract_financialdatasets_policies, DomainPolicy
 
 try:  # pragma: no cover - optional dependency chain
     import pyarrow.parquet as pq  # type: ignore
 except Exception:  # pragma: no cover - keep tests lightweight
     pq = None
+try:  # pragma: no cover - optional dependency
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover
+    pd = None
 
 from .lineage import LineageInput, LineageOutput, build_lineage_payload, compute_file_hash
 
@@ -130,6 +135,7 @@ class ReconciliationBuilder:
         self.default_allowed_statuses: Sequence[str] = tuple(
             reconciliation_cfg.get("allowed_validation_statuses", ["passed"])
         )
+        self.financialdatasets_policies: Dict[str, DomainPolicy] = extract_financialdatasets_policies(config)
         self.price_sanity = {
             "enabled": bool(price_sanity_cfg.get("enabled", True)),
             "strict": bool(price_sanity_cfg.get("strict", False)),
@@ -874,6 +880,24 @@ class ReconciliationBuilder:
             manifest = manifests.get(vendor)
             if not manifest:
                 continue
+            if vendor == "financialdatasets":
+                policy = self.financialdatasets_policies.get("financial_statements")
+                if not policy:
+                    raise ValueError("financialdatasets raw storage policy missing for financial_statements")
+                if policy.policy != "timeseries_csv_unsharded":
+                    raise ValueError(
+                        "financialdatasets financial_statements must use timeseries_csv_unsharded policy"
+                    )
+                snapshot = self._load_financialdatasets_statements_csv(
+                    vendor=vendor,
+                    manifest=manifest,
+                    start=start,
+                    end=end,
+                    policy=policy,
+                )
+                if snapshot:
+                    snapshots[vendor] = snapshot
+                continue
             files: List[Dict[str, Any]] = []
             records: Dict[tuple[str, str, str], List[Dict[str, Any]]] = defaultdict(list)
             for domain_dir in ("fundamentals", "financial_statements"):
@@ -903,6 +927,76 @@ class ReconciliationBuilder:
             if records:
                 snapshots[vendor] = VendorSnapshot(manifest=manifest, records_by_key=records, files=files)
         return snapshots
+
+    def _load_financialdatasets_statements_csv(
+        self,
+        *,
+        vendor: str,
+        manifest: ManifestInfo,
+        start: date,
+        end: date,
+        policy: DomainPolicy,
+    ) -> VendorSnapshot | None:
+        if pd is None:
+            raise RuntimeError("pandas is required to load financialdatasets CSV statements")
+        vendor_root = self.raw_data_root / vendor / "financial_statements"
+        if not vendor_root.exists():
+            return None
+        for legacy in vendor_root.rglob("*.parquet"):
+            if ".migration_staging" in legacy.parts:
+                continue
+            raise ValueError(
+                f"Legacy financialdatasets layout detected at {legacy}. "
+                "Run scripts/migrate_financialdatasets_raw_layout.py."
+            )
+        for legacy in vendor_root.rglob("*.csv"):
+            if ".migration_staging" in legacy.parts:
+                continue
+            try:
+                rel = legacy.relative_to(vendor_root)
+            except ValueError:
+                continue
+            if len(rel.parts) >= 4:
+                raise ValueError(
+                    f"Legacy financialdatasets layout detected at {legacy}. "
+                    "Run scripts/migrate_financialdatasets_raw_layout.py."
+                )
+        files: List[Dict[str, Any]] = []
+        records: Dict[tuple[str, str, str], List[Dict[str, Any]]] = defaultdict(list)
+        for csv_path in vendor_root.glob("*.csv"):
+            try:
+                frame = pd.read_csv(csv_path)
+            except Exception:
+                continue
+            if frame is None or frame.empty:
+                continue
+            file_hash = compute_file_hash(csv_path)
+            files.append({"path": str(csv_path), "file_hash": file_hash, "records": int(len(frame))})
+            symbol = csv_path.stem
+            report_col = policy.date_priority[0] if policy.date_priority else "report_date"
+            if report_col not in frame.columns:
+                continue
+            frame[report_col] = pd.to_datetime(frame[report_col], utc=True, errors="coerce").dt.date
+            frame = frame.dropna(subset=[report_col])
+            for _, row in frame.iterrows():
+                normalized = dict(row)
+                normalized["symbol"] = str(normalized.get("symbol") or normalized.get("ticker") or symbol)
+                normalized["report_date"] = self._normalize_date(normalized.get(report_col))
+                if not normalized["report_date"]:
+                    continue
+                if "filing_date" in normalized:
+                    normalized["filing_date"] = self._normalize_date(normalized.get("filing_date"))
+                normalized["source_vendor"] = vendor
+                normalized["__input_file_hash"] = file_hash
+                statement = str(normalized.get("statement_type") or "")
+                key = (normalized["symbol"], normalized["report_date"], statement)
+                report_day = date.fromisoformat(normalized["report_date"])
+                if not (start <= report_day <= end):
+                    continue
+                records[key].append(normalized)
+        if not records:
+            return None
+        return VendorSnapshot(manifest=manifest, records_by_key=records, files=files)
 
     def _materialize_fundamentals_canonical(
         self,
@@ -1040,6 +1134,16 @@ class ReconciliationBuilder:
             manifest = manifests.get(vendor)
             if not manifest:
                 continue
+            if vendor == "financialdatasets":
+                snapshot = self._load_financialdatasets_insiders_csv(
+                    vendor=vendor,
+                    manifest=manifest,
+                    start=start,
+                    end=end,
+                )
+                if snapshot:
+                    snapshots[vendor] = snapshot
+                continue
             vendor_root = self.raw_data_root / vendor / "insider_trades"
             if not vendor_root.exists():
                 continue
@@ -1077,6 +1181,74 @@ class ReconciliationBuilder:
             if records:
                 snapshots[vendor] = VendorSnapshot(manifest=manifest, records_by_key=records, files=files)
         return snapshots
+
+    def _load_financialdatasets_insiders_csv(
+        self,
+        *,
+        vendor: str,
+        manifest: ManifestInfo,
+        start: date,
+        end: date,
+    ) -> VendorSnapshot | None:
+        if pd is None:
+            raise RuntimeError("pandas is required to load financialdatasets insiders CSV")
+        vendor_root = self.raw_data_root / vendor / "insider_trades"
+        if not vendor_root.exists():
+            return None
+        for legacy in vendor_root.rglob("*.parquet"):
+            if ".migration_staging" in legacy.parts:
+                continue
+            raise ValueError(
+                f"Legacy financialdatasets layout detected at {legacy}. "
+                "Run scripts/migrate_financialdatasets_raw_layout.py."
+            )
+        for legacy in vendor_root.rglob("*.csv"):
+            if ".migration_staging" in legacy.parts:
+                continue
+            try:
+                rel = legacy.relative_to(vendor_root)
+            except ValueError:
+                continue
+            if len(rel.parts) >= 4:
+                raise ValueError(
+                    f"Legacy financialdatasets layout detected at {legacy}. "
+                    "Run scripts/migrate_financialdatasets_raw_layout.py."
+                )
+        files: List[Dict[str, Any]] = []
+        records: Dict[tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+        for csv_path in vendor_root.glob("*/*.csv"):
+            try:
+                frame = pd.read_csv(csv_path)
+            except Exception:
+                continue
+            if frame is None or frame.empty:
+                continue
+            file_hash = compute_file_hash(csv_path)
+            files.append({"path": str(csv_path), "file_hash": file_hash, "records": int(len(frame))})
+            symbol = csv_path.parent.name
+            frame["filing_date"] = pd.to_datetime(frame.get("filing_date"), utc=True, errors="coerce").dt.date
+            frame = frame.dropna(subset=["filing_date"])
+            for _, row in frame.iterrows():
+                normalized = dict(row)
+                normalized["symbol"] = str(normalized.get("symbol") or normalized.get("ticker") or symbol)
+                filing_date = self._normalize_date(normalized.get("filing_date"))
+                if not filing_date:
+                    continue
+                normalized["filing_date"] = filing_date
+                normalized["transaction_date"] = self._normalize_date(normalized.get("transaction_date"))
+                canonical_text = filing_date
+                canonical_day = date.fromisoformat(canonical_text)
+                if not (start <= canonical_day <= end):
+                    continue
+                normalized["canonical_date"] = canonical_text
+                normalized["source_vendor"] = vendor
+                normalized["__input_file_hash"] = file_hash
+                normalized["__partition_day"] = canonical_text
+                key = (normalized["symbol"], normalized["canonical_date"])
+                records[key].append(normalized)
+        if not records:
+            return None
+        return VendorSnapshot(manifest=manifest, records_by_key=records, files=files)
 
     def _materialize_insiders_canonical(
         self,

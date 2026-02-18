@@ -28,6 +28,40 @@ vendors:
         institutional_ownership,
         news,
       ]
+    raw_storage_policy:
+      company_facts:
+        policy: snapshot_single_csv
+        dedup_keys: [ticker]
+      financial_metrics:
+        policy: snapshot_table_csv
+        date_priority: [report_period, as_of_date]
+        date_kind: date
+        dedup_keys: [ticker]
+      financial_metrics_snapshot:
+        policy: snapshot_table_csv
+        date_priority: [report_period, as_of_date]
+        date_kind: date
+        dedup_keys: [ticker]
+      financial_statements:
+        policy: timeseries_csv_unsharded
+        date_priority: [report_date]
+        date_kind: date
+        dedup_keys: [ticker, report_date, statement_type]
+      institutional_ownership:
+        policy: timeseries_csv_unsharded
+        date_priority: [report_period]
+        date_kind: date
+        dedup_keys: [ticker, report_period, investor]
+      news:
+        policy: timeseries_csv_unsharded
+        date_priority: [published_at, date]
+        date_kind: datetime
+        dedup_keys: [ticker, published_at, date, title, url]
+      insider_trades:
+        policy: timeseries_csv_yearly
+        date_priority: [filing_date]
+        date_kind: date
+        dedup_keys: [ticker, filing_date, name, transaction_date, transaction_value, transaction_shares, security_title]
 
 reconciliation:
   allowed_validation_statuses: ["passed"]

@@ -5,17 +5,26 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
-from typing import Iterable, Mapping, MutableMapping, Sequence
+from typing import Dict, Iterable, Mapping, MutableMapping, Sequence
 
 try:  # pragma: no cover - optional dependency
     import pyarrow.parquet as pq  # type: ignore
 except Exception:  # pragma: no cover - keep optional dependency soft
     pq = None
 
+try:  # pragma: no cover - pandas optional
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover
+    pd = None
+
 from infra.paths import raw_root
 from infra.storage.parquet import write_parquet_atomic
+from infra.storage.financialdatasets_policy import DomainPolicy, load_financialdatasets_policies
+
+LOGGER = logging.getLogger(__name__)
 
 
 class RawEquityOHLCVWriter:
@@ -330,131 +339,360 @@ class RawFundamentalsWriter:
 
 
 class RawFinancialDatasetsWriter:
-    """Writes Financial Datasets raw domains into canonical raw storage."""
+    """Writes Financial Datasets raw domains into policy-driven CSV layouts."""
 
-    def __init__(self, base_path: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        base_path: Path | str | None = None,
+        *,
+        policy_map: Mapping[str, DomainPolicy] | None = None,
+        config_path: Path | str | None = None,
+        allow_old_layout: bool = False,
+        vendor_prefix: bool = True,
+    ) -> None:
         resolved = base_path if base_path is not None else raw_root()
         self.base_path = Path(resolved)
+        if policy_map is not None:
+            normalized: Dict[str, DomainPolicy] = {}
+            for domain, raw in policy_map.items():
+                if isinstance(raw, DomainPolicy):
+                    normalized[domain] = raw
+                elif isinstance(raw, Mapping):
+                    normalized[domain] = DomainPolicy(
+                        policy=str(raw.get("policy", "")),
+                        date_priority=tuple(raw.get("date_priority", []) or []),
+                        date_kind=str(raw.get("date_kind", "date") or "date"),
+                        dedup_keys=tuple(raw.get("dedup_keys", []) or []),
+                        expected_columns=tuple(raw.get("expected_columns", []) or []),
+                    )
+            self.policy_map = normalized
+        else:
+            self.policy_map = load_financialdatasets_policies(config_path)
+        self.allow_old_layout = allow_old_layout
+        self.vendor_prefix = vendor_prefix
 
     def write_company_facts(
         self,
         vendor: str,
         records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
     ) -> MutableMapping[str, object]:
-        return self._write_symbol_date(
-            vendor,
-            records,
-            domain_dir="company_facts",
-            symbol_keys=("symbol", "ticker"),
-            date_keys=("as_of_date", "snapshot_date", "ingest_date", "date"),
-        )
+        return self._write_domain(vendor, "company_facts", records)
 
     def write_financial_metrics(
         self,
         vendor: str,
         records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
     ) -> MutableMapping[str, object]:
-        return self._write_symbol_date(
-            vendor,
-            records,
-            domain_dir="financial_metrics",
-            symbol_keys=("symbol", "ticker"),
-            date_keys=("report_period", "as_of_date", "ingest_date", "date"),
-        )
+        return self._write_domain(vendor, "financial_metrics", records)
 
     def write_financial_metrics_snapshot(
         self,
         vendor: str,
         records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
     ) -> MutableMapping[str, object]:
-        return self._write_symbol_date(
-            vendor,
-            records,
-            domain_dir="financial_metrics_snapshot",
-            symbol_keys=("symbol", "ticker"),
-            date_keys=("as_of_date", "ingest_date", "date"),
-        )
+        return self._write_domain(vendor, "financial_metrics_snapshot", records)
 
     def write_financial_statements(
         self,
         vendor: str,
         records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
     ) -> MutableMapping[str, object]:
-        return self._write_symbol_date(
-            vendor,
-            records,
-            domain_dir="financial_statements",
-            symbol_keys=("symbol", "ticker"),
-            date_keys=("report_date", "report_period"),
-        )
+        return self._write_domain(vendor, "financial_statements", records)
 
     def write_insider_trades(
         self,
         vendor: str,
         records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
     ) -> MutableMapping[str, object]:
-        return self._write_symbol_date(
-            vendor,
-            records,
-            domain_dir="insider_trades",
-            symbol_keys=("symbol", "ticker"),
-            date_keys=("transaction_date", "filing_date"),
-        )
+        return self._write_domain(vendor, "insider_trades", records)
 
     def write_institutional_ownership(
         self,
         vendor: str,
         records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
     ) -> MutableMapping[str, object]:
-        return self._write_symbol_date(
-            vendor,
-            records,
-            domain_dir="institutional_ownership",
-            symbol_keys=("symbol", "ticker", "investor"),
-            date_keys=("report_period",),
-        )
+        return self._write_domain(vendor, "institutional_ownership", records)
 
     def write_news(
         self,
         vendor: str,
         records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
     ) -> MutableMapping[str, object]:
-        return self._write_symbol_date(
-            vendor,
-            records,
-            domain_dir="news",
-            symbol_keys=("symbol", "ticker"),
-            date_keys=("date", "published_at", "published_date"),
-        )
+        return self._write_domain(vendor, "news", records)
 
-    def _write_symbol_date(
+    def _write_domain(
         self,
         vendor: str,
+        domain: str,
         records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
-        *,
-        domain_dir: str,
-        symbol_keys: Sequence[str],
-        date_keys: Sequence[str],
     ) -> MutableMapping[str, object]:
-        grouped: MutableMapping[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
-        for index, record in enumerate(records):
-            symbol = _resolve_key(record, symbol_keys, label="symbol", index=index)
-            raw_date = _resolve_key(record, date_keys, label="date", index=index)
-            iso_date = _coerce_date(raw_date, index).isoformat()
-            grouped[(symbol, iso_date)].append(record)
+        if pd is None:
+            raise RuntimeError("pandas is required for FinancialDatasets raw CSV writes")
+        policy = self._resolve_policy(domain)
+        vendor_root = self._vendor_root(vendor)
+        if not self.allow_old_layout:
+            self._assert_no_old_layout(vendor_root, domain)
+        if not records:
+            return {"files": [], "total_files": 0}
 
+        if policy.policy == "snapshot_single_csv":
+            return self._write_snapshot_single(vendor_root, domain, policy, records)
+        if policy.policy == "snapshot_table_csv":
+            return self._write_snapshot_table(vendor_root, domain, policy, records)
+        if policy.policy == "timeseries_csv_unsharded":
+            return self._write_timeseries_unsharded(vendor_root, domain, policy, records)
+        if policy.policy == "timeseries_csv_yearly":
+            return self._write_timeseries_yearly(vendor_root, domain, policy, records)
+        if policy.policy == "timeseries_parquet_sharded":
+            raise ValueError("timeseries_parquet_sharded policy is reserved for future domains")
+        raise ValueError(f"Unsupported raw storage policy '{policy.policy}' for {domain}")
+
+    def _vendor_root(self, vendor: str) -> Path:
+        if self.vendor_prefix:
+            return self.base_path / vendor
+        return self.base_path
+
+    def _resolve_policy(self, domain: str) -> DomainPolicy:
+        policy = self.policy_map.get(domain)
+        if policy is None:
+            raise ValueError(f"No FinancialDatasets raw storage policy configured for '{domain}'")
+        return policy
+
+    def _assert_no_old_layout(self, vendor_root: Path, domain: str) -> None:
+        legacy_root = vendor_root / domain
+        if not legacy_root.exists():
+            return
+        for path in legacy_root.rglob("*.parquet"):
+            if ".migration_staging" in path.parts:
+                continue
+            raise RuntimeError(
+                f"Legacy FinancialDatasets layout detected at {path}. "
+                "Run scripts/migrate_financialdatasets_raw_layout.py before ingesting new data."
+            )
+        for path in legacy_root.rglob("*.csv"):
+            if ".migration_staging" in path.parts:
+                continue
+            try:
+                rel = path.relative_to(legacy_root)
+            except ValueError:
+                continue
+            if len(rel.parts) < 4:
+                continue
+            raise RuntimeError(
+                f"Legacy FinancialDatasets layout detected at {path}. "
+                "Run scripts/migrate_financialdatasets_raw_layout.py before ingesting new data."
+            )
+
+    def _write_snapshot_single(
+        self,
+        vendor_root: Path,
+        domain: str,
+        policy: DomainPolicy,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        df = self._records_to_frame(records)
+        df = self._ensure_ticker(df)
+        df = self._normalize_date_columns(df, policy)
+        path = vendor_root / domain / "Facts.csv"
+        return self._upsert_single_csv(path, df, policy)
+
+    def _write_snapshot_table(
+        self,
+        vendor_root: Path,
+        domain: str,
+        policy: DomainPolicy,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        df = self._records_to_frame(records)
+        df = self._ensure_ticker(df)
+        df = self._normalize_date_columns(df, policy)
+        df = self._filter_missing_date(df, policy, domain)
+        if df.empty:
+            return {"files": [], "total_files": 0}
         file_details = []
-        for (symbol, iso_date), items in grouped.items():
-            ordered = sorted(items, key=lambda rec: str(rec.get("ingest_ts") or ""))
-            path = self._resolve_path(vendor, domain_dir, symbol, iso_date)
-            result = write_parquet_atomic(list(ordered), path)
-            file_details.append({"path": str(path), "hash": result["file_hash"], "records": len(items)})
-
+        for ticker, group in df.groupby("ticker"):
+            path = vendor_root / domain / f"{ticker}.csv"
+            result = self._append_csv(path, group, policy, domain)
+            file_details.append(result)
         return {"files": file_details, "total_files": len(file_details)}
 
-    def _resolve_path(self, vendor: str, domain_dir: str, symbol: str, iso_date: str) -> Path:
-        year, month, day = iso_date.split("-")
-        return self.base_path / vendor / domain_dir / symbol / year / month / f"{day}.parquet"
+    def _write_timeseries_unsharded(
+        self,
+        vendor_root: Path,
+        domain: str,
+        policy: DomainPolicy,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        df = self._records_to_frame(records)
+        df = self._ensure_ticker(df)
+        df = self._normalize_date_columns(df, policy)
+        df = self._filter_missing_date(df, policy, domain)
+        if df.empty:
+            return {"files": [], "total_files": 0}
+        file_details = []
+        for ticker, group in df.groupby("ticker"):
+            path = vendor_root / domain / f"{ticker}.csv"
+            result = self._append_csv(path, group, policy, domain)
+            file_details.append(result)
+        return {"files": file_details, "total_files": len(file_details)}
+
+    def _write_timeseries_yearly(
+        self,
+        vendor_root: Path,
+        domain: str,
+        policy: DomainPolicy,
+        records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    ) -> MutableMapping[str, object]:
+        df = self._records_to_frame(records)
+        df = self._ensure_ticker(df)
+        df = self._normalize_date_columns(df, policy)
+        df = self._filter_missing_date(df, policy, domain)
+        if df.empty:
+            return {"files": [], "total_files": 0}
+        df["__year"] = df["__date_key"].str.slice(0, 4)
+        file_details = []
+        for (ticker, year), group in df.groupby(["ticker", "__year"]):
+            path = vendor_root / domain / ticker / f"{year}.csv"
+            result = self._append_csv(path, group, policy, domain)
+            file_details.append(result)
+        return {"files": file_details, "total_files": len(file_details)}
+
+    def _records_to_frame(self, records: Sequence[Mapping[str, object]] | Iterable[Mapping[str, object]]) -> "pd.DataFrame":
+        return pd.DataFrame([dict(record) for record in records])
+
+    def _ensure_ticker(self, df: "pd.DataFrame") -> "pd.DataFrame":
+        if "ticker" not in df.columns:
+            if "symbol" in df.columns:
+                df["ticker"] = df["symbol"].astype(str)
+            else:
+                raise ValueError("FinancialDatasets records must include ticker or symbol")
+        df["ticker"] = df["ticker"].astype(str)
+        return df
+
+    def _normalize_date_columns(self, df: "pd.DataFrame", policy: DomainPolicy) -> "pd.DataFrame":
+        for column in policy.date_priority:
+            if column not in df.columns:
+                continue
+            if policy.date_kind == "datetime":
+                df[column] = _format_datetime_series(df[column])
+            else:
+                df[column] = _format_date_series(df[column])
+        return df
+
+    def _filter_missing_date(self, df: "pd.DataFrame", policy: DomainPolicy, domain: str) -> "pd.DataFrame":
+        if not policy.date_priority:
+            return df
+        date_key = pd.Series([None] * len(df), index=df.index, dtype="object")
+        for column in policy.date_priority:
+            if column not in df.columns:
+                continue
+            date_key = date_key.fillna(df[column].where(df[column].astype(str).str.len() > 0))
+        df["__date_key"] = date_key
+        missing = df["__date_key"].isna() | (df["__date_key"].astype(str).str.len() == 0)
+        if missing.any():
+            LOGGER.warning(
+                "FinancialDatasets %s rows missing date key (%s); dropping %d rows",
+                domain,
+                ", ".join(policy.date_priority),
+                int(missing.sum()),
+            )
+        return df.loc[~missing].copy()
+
+    def _append_csv(
+        self,
+        path: Path,
+        new_rows: "pd.DataFrame",
+        policy: DomainPolicy,
+        domain: str,
+        *,
+        dedupe: bool = True,
+    ) -> Dict[str, object]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = _read_csv(path)
+        expected = policy.expected_columns or tuple(existing.columns)
+        if expected:
+            new_cols = set(new_rows.columns) - set(expected)
+            if new_cols:
+                LOGGER.warning(
+                    "FinancialDatasets %s encountered new columns: %s",
+                    domain,
+                    ", ".join(sorted(new_cols)),
+                )
+        combined = _union_frames(existing, new_rows)
+        if dedupe:
+            combined = self._dedup_frame(combined, policy, domain)
+        combined = _order_columns(combined, expected)
+        _write_csv(path, combined)
+        file_hash = _compute_file_hash(path)
+        return {"path": str(path), "hash": file_hash, "records": int(len(combined))}
+
+    def _upsert_single_csv(
+        self,
+        path: Path,
+        new_rows: "pd.DataFrame",
+        policy: DomainPolicy,
+    ) -> Dict[str, object]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_suffix(".lock")
+        _with_lock(lock_path)
+        try:
+            existing = _read_csv(path)
+            expected = policy.expected_columns or tuple(existing.columns)
+            if expected:
+                new_cols = set(new_rows.columns) - set(expected)
+                if new_cols:
+                    LOGGER.warning(
+                        "FinancialDatasets company_facts encountered new columns: %s",
+                        ", ".join(sorted(new_cols)),
+                    )
+            combined = _union_frames(existing, new_rows)
+            combined = combined.drop_duplicates(subset=["ticker"], keep="last")
+            combined = combined.sort_values("ticker", kind="mergesort")
+            combined = _order_columns(combined, expected)
+            _write_csv(path, combined)
+        finally:
+            _release_lock(lock_path)
+        file_hash = _compute_file_hash(path)
+        return {"path": str(path), "hash": file_hash, "records": int(len(combined))}
+
+    def _dedup_frame(self, df: "pd.DataFrame", policy: DomainPolicy, domain: str) -> "pd.DataFrame":
+        if domain == "news":
+            title = df.get("title")
+            url = df.get("url")
+            if title is None:
+                title = pd.Series([""] * len(df))
+            if url is None:
+                url = pd.Series([""] * len(df))
+            title = title.fillna("").astype(str)
+            url = url.fillna("").astype(str)
+            df["__title_or_url"] = title.where(title.str.len() > 0, url)
+            subset = ["ticker", "__date_key", "__title_or_url"]
+        elif domain == "insider_trades":
+            for col in (
+                "filing_date",
+                "name",
+                "transaction_date",
+                "transaction_value",
+                "transaction_shares",
+                "security_title",
+            ):
+                if col not in df.columns:
+                    df[col] = ""
+            subset = ["ticker", "filing_date", "name", "transaction_date", "transaction_value", "transaction_shares", "security_title"]
+        else:
+            subset = ["ticker"]
+            if policy.date_priority:
+                subset.append("__date_key")
+            for key in policy.dedup_keys:
+                if key in {"ticker", "__date_key"}:
+                    continue
+                if key not in df.columns:
+                    df[key] = ""
+                subset.append(key)
+        df = df.drop_duplicates(subset=subset, keep="last")
+        if "__date_key" in df.columns:
+            df = df.sort_values(["ticker", "__date_key"], kind="mergesort")
+        return df
 
 
 def _merge_with_existing(path: Path, new_records: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
@@ -518,6 +756,90 @@ def _shard_path(base_dir: Path, timestamp: datetime, interval: str) -> Path:
     return base_dir / f"{timestamp.year:04d}" / f"{timestamp.month:02d}.parquet"
 
 
+def _read_csv(path: Path) -> "pd.DataFrame":
+    if pd is None or not path.exists():
+        return pd.DataFrame() if pd is not None else None  # type: ignore[return-value]
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _write_csv(path: Path, frame: "pd.DataFrame") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False)
+
+
+def _union_frames(existing: "pd.DataFrame", incoming: "pd.DataFrame") -> "pd.DataFrame":
+    if existing is None or existing.empty:
+        return incoming.copy()
+    if incoming is None or incoming.empty:
+        return existing.copy()
+    all_cols = sorted(set(existing.columns).union(incoming.columns))
+    left = existing.reindex(columns=all_cols)
+    right = incoming.reindex(columns=all_cols)
+    return pd.concat([left, right], ignore_index=True)
+
+
+def _order_columns(frame: "pd.DataFrame", expected: Sequence[str] | tuple[str, ...]) -> "pd.DataFrame":
+    if not expected:
+        return frame
+    ordered = [col for col in expected if col in frame.columns]
+    remainder = [col for col in frame.columns if col not in ordered]
+    return frame[ordered + remainder]
+
+
+def _format_date_series(series: "pd.Series") -> "pd.Series":
+    data = pd.to_datetime(series, utc=True, errors="coerce").dt.date
+    return data.map(lambda value: value.isoformat() if value is not None else "")
+
+
+def _format_datetime_series(series: "pd.Series") -> "pd.Series":
+    data = pd.to_datetime(series, utc=True, errors="coerce")
+    return data.map(lambda value: value.isoformat() if pd.notna(value) else "")
+
+
+def _compute_file_hash(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+_LOCK_HANDLES: dict[Path, object] = {}
+
+
+def _with_lock(path: Path) -> None:
+    try:
+        import fcntl  # type: ignore
+    except Exception as exc:  # pragma: no cover - Windows fallback
+        raise RuntimeError(
+            "company_facts writes require Unix file locking (fcntl not available). "
+            "Run single-threaded ingestion or use a Unix environment."
+        ) from exc
+    handle = path.open("w")
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    _LOCK_HANDLES[path] = handle
+
+
+def _release_lock(path: Path) -> None:
+    handle = _LOCK_HANDLES.pop(path, None)
+    if handle is None:
+        return
+    try:
+        import fcntl  # type: ignore
+    except Exception:  # pragma: no cover - platform guard
+        handle.close()
+        return
+    try:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
 def _env_shard_flag() -> bool | None:
     value = os.environ.get("QUANTO_RAW_YEARLY_DAILY")
     if value is None:
@@ -528,4 +850,9 @@ def _env_shard_flag() -> bool | None:
     return True
 
 
-__all__ = ["RawEquityOHLCVWriter", "RawFundamentalsWriter", "RawOptionsWriter"]
+__all__ = [
+    "RawEquityOHLCVWriter",
+    "RawFundamentalsWriter",
+    "RawOptionsWriter",
+    "RawFinancialDatasetsWriter",
+]
