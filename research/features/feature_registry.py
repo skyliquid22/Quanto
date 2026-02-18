@@ -34,6 +34,10 @@ from research.features.sets.fundamentals_v1 import (
     FUNDAMENTALS_V1_COLUMNS,
     attach_fundamentals_features,
 )
+from research.features.sets.insiders_v1 import (
+    INSIDERS_V1_COLUMNS,
+    build_insiders_v1_features,
+)
 from research.features.regime_features_v1 import (
     REGIME_FEATURE_COLUMNS,
     compute_primary_regime_features,
@@ -371,6 +375,14 @@ def _core_v1_fundamentals_builder(
     core = compute_core_features_v1(equity_df)
     return attach_fundamentals_features(core, context)
 
+
+def _insiders_v1_builder(
+    equity_df: "pd.DataFrame",
+    _: CanonicalOptionData | None,
+    context: FeatureBuildContext,
+) -> "pd.DataFrame":
+    return build_insiders_v1_features(equity_df, context)
+
 def _load_options_payload(
     symbol: str,
     start: date | str,
@@ -592,6 +604,12 @@ _FEATURE_REGISTRY: Dict[str, _FeatureSetSpec] = {
         requires_options=False,
         builder=_core_v1_fundamentals_builder,
     ),
+    "insiders_v1": _FeatureSetSpec(
+        name="insiders_v1",
+        observation_columns=INSIDERS_V1_COLUMNS,
+        requires_options=False,
+        builder=_insiders_v1_builder,
+    ),
     "options_surface_v1": _FeatureSetSpec(
         name="options_surface_v1",
         observation_columns=OPTIONS_SURFACE_V1_COLUMNS,
@@ -624,6 +642,7 @@ __all__ = [
     "CORE_V1_FUNDAMENTALS_XSEC_COLUMNS",
     "CORE_V1_FUNDAMENTALS_XSEC_OPTS_COLUMNS",
     "FUNDAMENTALS_V1_COLUMNS",
+    "INSIDERS_V1_COLUMNS",
     "OPTIONS_SURFACE_V1_COLUMNS",
     "normalize_feature_set_name",
     "normalize_regime_feature_set_name",
