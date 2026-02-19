@@ -23,7 +23,7 @@ The goal is not "black-box alpha," but **transparent, auditable ML-driven tradin
 
 - **Phase 1 (current):** research, backtests, qualification gates, and shadow/paper execution only.
 - **Phase 2:** live execution via broker adapters (Alpaca), with strict risk controls.
-- **Non-goals:** no GUI/dashboard yet, no HFT/tick-level ingestion, no AutoML.
+- **Non-goals:** no HFT/tick-level ingestion, no AutoML.
 
 ---
 
@@ -58,6 +58,28 @@ The goal is not "black-box alpha," but **transparent, auditable ML-driven tradin
 - Structured metrics output
 - Diagnostics and plotting utilities for experiment analysis
 - Designed to support long-running comparative research
+
+---
+
+## Experiment Dashboard (Streamlit)
+
+Run the dashboard locally:
+
+```bash
+streamlit run monitoring/experiment_dashboard.py
+```
+
+Then open the URL Streamlit prints (typically `http://localhost:8501`).
+
+### Dashboard Preview
+
+**Regime slices**
+
+![Regime slices dashboard view](docs/assets/regime_slices.png)
+
+**Experiment comparison**
+
+![Experiment comparison table](docs/assets/compare_experiments.png)
 
 ---
 
