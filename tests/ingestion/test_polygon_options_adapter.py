@@ -216,5 +216,43 @@ def test_flat_file_streams_zip_payloads(tmp_path):
     assert oi_records[0]["open_interest"] == 250.0
 
 
+def test_ohlcv_missing_price_raises_value_error():
+    """float(None) bug: missing OHLC keys must raise ValueError, not TypeError."""
+    client = _StubOptionsRestClient()
+    client.ohlcv_payloads["OPT1"] = [
+        {"results": [{"t": 1704153600000}]},  # no OHLC keys
+    ]
+    adapter = PolygonOptionsAdapter(rest_client=client)
+
+    request = OptionTimeseriesIngestionRequest(
+        domain="option_contract_ohlcv",
+        option_symbols=("OPT1",),
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 2),
+    )
+
+    with pytest.raises(ValueError, match="open"):
+        asyncio.run(adapter.fetch_option_ohlcv_rest(request))
+
+
+def test_ohlcv_missing_volume_defaults_to_zero():
+    """Volume should default to 0.0 when absent from payload."""
+    client = _StubOptionsRestClient()
+    client.ohlcv_payloads["OPT1"] = [
+        {"results": [{"t": 1704153600000, "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1}]},
+    ]
+    adapter = PolygonOptionsAdapter(rest_client=client)
+
+    request = OptionTimeseriesIngestionRequest(
+        domain="option_contract_ohlcv",
+        option_symbols=("OPT1",),
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 2),
+    )
+
+    records = asyncio.run(adapter.fetch_option_ohlcv_rest(request))
+    assert records[0]["volume"] == 0.0
+
+
 if __name__ == "__main__":  # pragma: no cover - debug helper
     pytest.main([__file__])

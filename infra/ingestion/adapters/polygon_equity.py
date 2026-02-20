@@ -244,11 +244,11 @@ class PolygonEquityAdapter:
         return {
             "timestamp": _coerce_timestamp(timestamp_value),
             "symbol": symbol,
-            "open": float(payload.get("open", payload.get("o"))),
-            "high": float(payload.get("high", payload.get("h"))),
-            "low": float(payload.get("low", payload.get("l"))),
-            "close": float(payload.get("close", payload.get("c"))),
-            "volume": float(payload.get("volume", payload.get("v", 0.0))),
+            "open": _safe_float(payload.get("open", payload.get("o")), "open"),
+            "high": _safe_float(payload.get("high", payload.get("h")), "high"),
+            "low": _safe_float(payload.get("low", payload.get("l")), "low"),
+            "close": _safe_float(payload.get("close", payload.get("c")), "close"),
+            "volume": _safe_float(payload.get("volume", payload.get("v")), "volume", default=0.0),
             "source_vendor": self.vendor,
         }
 
@@ -263,11 +263,11 @@ class PolygonEquityAdapter:
         return {
             "timestamp": _coerce_timestamp(timestamp_value),
             "symbol": str(symbol),
-            "open": float(payload.get("open", payload.get("o"))),
-            "high": float(payload.get("high", payload.get("h"))),
-            "low": float(payload.get("low", payload.get("l"))),
-            "close": float(payload.get("close", payload.get("c"))),
-            "volume": float(payload.get("volume", payload.get("v", 0.0))),
+            "open": _safe_float(payload.get("open", payload.get("o")), "open"),
+            "high": _safe_float(payload.get("high", payload.get("h")), "high"),
+            "low": _safe_float(payload.get("low", payload.get("l")), "low"),
+            "close": _safe_float(payload.get("close", payload.get("c")), "close"),
+            "volume": _safe_float(payload.get("volume", payload.get("v")), "volume", default=0.0),
             "source_vendor": self.vendor,
         }
 
@@ -278,6 +278,18 @@ class PolygonEquityAdapter:
             # TODO: integrate with S3 client when credentials plumbing is available.
             raise ValueError("s3:// URIs require a custom resolver")
         return Path(uri)
+
+
+def _safe_float(value: Any, field: str, *, default: float | None = None) -> float:
+    """Convert *value* to float, raising ``ValueError`` when it is ``None`` and
+    no *default* is provided.  This avoids the ``TypeError`` that
+    ``float(None)`` would otherwise raise when a Polygon payload is missing an
+    expected key."""
+    if value is None:
+        if default is not None:
+            return default
+        raise ValueError(f"Payload missing required numeric field: {field}")
+    return float(value)
 
 
 def _coerce_timestamp(value: Any) -> datetime:

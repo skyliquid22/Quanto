@@ -10,6 +10,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover - import guard
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import pytest
+
 from infra.ingestion.adapters import EquityIngestionRequest, PolygonEquityAdapter, RateLimitError
 
 
@@ -95,3 +97,39 @@ def test_flat_file_loader_preserves_file_order(tmp_path):
 
     records = list(adapter.stream_flat_file_equity_bars(request))
     assert [record["symbol"] for record in records] == ["AAA", "BBB"]
+
+
+def test_rest_missing_ohlc_raises_value_error():
+    """float(None) bug: missing OHLC keys must raise ValueError, not TypeError."""
+    payloads = [
+        {"results": [{"t": 1704067200000}]},  # no OHLC keys at all
+    ]
+    client = _FakeRestClient(payloads)
+    adapter = PolygonEquityAdapter(rest_client=client, rest_config={"concurrency": 1})
+
+    request = EquityIngestionRequest(
+        symbols=("AAPL",),
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 1),
+    )
+
+    with pytest.raises(ValueError, match="open"):
+        asyncio.run(adapter.fetch_equity_ohlcv_rest(request))
+
+
+def test_rest_missing_volume_defaults_to_zero():
+    """Volume should default to 0.0 when absent from payload."""
+    payloads = [
+        {"results": [{"t": 1704067200000, "o": 1, "h": 2, "l": 1, "c": 2}]},
+    ]
+    client = _FakeRestClient(payloads)
+    adapter = PolygonEquityAdapter(rest_client=client, rest_config={"concurrency": 1})
+
+    request = EquityIngestionRequest(
+        symbols=("AAPL",),
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 1),
+    )
+
+    records = asyncio.run(adapter.fetch_equity_ohlcv_rest(request))
+    assert records[0]["volume"] == 0.0
