@@ -1,0 +1,15 @@
+{
+  "hooks": [
+    {
+      "matcher": {
+        "event": "session_start"
+      },
+      "hooks": [
+        {
+          "type": "command",
+          "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gt prime 2>&1 || true"
+        }
+      ]
+    }
+  ]
+}
