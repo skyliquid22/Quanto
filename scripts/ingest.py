@@ -382,7 +382,7 @@ def _handle_options(
 
     rest_cfg, flat_cfg = _resolve_ingestion_configs(config, normalized.vendor, normalized.vendor_params)
     raw_writer = RawOptionsWriter(base_path=raw_base)
-    adapter, cleanup_callbacks = _instantiate_options_adapter(route, normalized.vendor, rest_cfg, flat_cfg, mode)
+    adapter, cleanup_callbacks = _instantiate_options_adapter(route, normalized.vendor, rest_cfg, flat_cfg, mode, normalized.vendor_params)
     pipeline = OptionsIngestionPipeline(
         adapter=adapter,
         router=router,
