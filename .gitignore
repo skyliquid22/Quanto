@@ -31,3 +31,9 @@ tmp/
 cache/
 tmpcache/
 notebooks/fundamentals_pipeline_smoke.ipynb
+
+# Gas Town runtime
+.beads/
+.runtime/
+.claude/
+.logs/
