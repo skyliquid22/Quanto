@@ -31,6 +31,7 @@ from infra.ingestion.adapters import (
 )
 from infra.ingestion.data_pipeline import EquityIngestionPipeline
 from infra.ingestion.fundamentals_pipeline import FinancialDatasetsRawPipeline, FundamentalsIngestionPipeline
+from infra.ingestion.insiders_pipeline import InsiderTradesIngestionPipeline
 from infra.ingestion.ivolatility_client import IvolatilityClient, IvolatilityClientError
 from infra.ingestion.options_pipeline import OptionPartition, OptionsIngestionPipeline, OptionsIngestionPlan
 from infra.ingestion.request import IngestionRequest as NormalizedIngestionRequest
@@ -56,6 +57,7 @@ SUPPORTED_DOMAINS = {
     "company_facts",
     "financial_metrics",
     "financial_metrics_snapshot",
+    "insider_trades",
     "institutional_ownership",
     "news",
     "option_contract_reference",
@@ -156,6 +158,8 @@ def _dispatch_domain(
         return _handle_fundamentals(args, config, normalized, router, run_id, config_path)
     if domain in FINANCIALDATASETS_RAW_DOMAINS:
         return _handle_financialdatasets_raw(args, config, normalized, router, run_id, config_path)
+    if domain == "insider_trades":
+        return _handle_insider_trades(args, config, normalized, router, run_id, config_path)
     if domain in {"option_contract_reference", "option_contract_ohlcv", "option_open_interest"}:
         return _handle_options(args, config, normalized, router, run_id, config_path)
     if domain == "options_surface_v1":
@@ -325,6 +329,61 @@ def _handle_financialdatasets_raw(
         raw_writer=raw_writer,
         manifest_base_dir=manifest_base,
         router=router,
+    )
+
+    try:
+        manifest = pipeline.run(normalized, run_id=run_id, forced_mode=forced_mode)
+    finally:
+        for callback in cleanup_callbacks:
+            callback()
+
+    return _success_summary(normalized, run_id, mode, route.adapter_name, config_path, manifest)
+
+
+def _handle_insider_trades(
+    args: argparse.Namespace,
+    config: Mapping[str, Any],
+    normalized: NormalizedIngestionRequest,
+    router: IngestionRouter,
+    run_id: str,
+    config_path: Path,
+) -> Mapping[str, Any]:
+    forced_mode = _forced_mode(args.mode) or _forced_mode(normalized.mode)
+    mode: Mode = forced_mode or router.route_financialdatasets_raw()
+    if mode != "rest":
+        return _failure_summary(
+            normalized, run_id, mode, None, config_path,
+            "insider_trades only supports REST ingestion mode",
+        )
+    try:
+        route = router.resolve_vendor_adapter("insider_trades", normalized.vendor, mode)
+    except ValueError as exc:
+        return _failure_summary(normalized, run_id, mode, None, config_path, str(exc))
+
+    data_root = _resolve_data_root(args.data_root)
+    raw_base = _resolve_raw_base(config, data_root)
+    manifest_base_cfg = config.get("manifest_base_dir")
+    manifest_base = Path(manifest_base_cfg).expanduser() if manifest_base_cfg else raw_base
+    manifest_path = manifest_base / normalized.vendor / "insider_trades" / "manifests" / f"{run_id}.json"
+
+    if args.dry_run:
+        return _dry_run_summary(normalized, run_id, mode, route.adapter_name, config_path, manifest_path, args.force)
+
+    if not args.force and manifest_path.exists():
+        return _failure_summary(
+            normalized,
+            run_id,
+            mode,
+            route.adapter_name,
+            config_path,
+            f"Manifest {manifest_path} already exists. Re-run with --force to overwrite.",
+        )
+
+    rest_cfg, _ = _resolve_ingestion_configs(config, normalized.vendor, normalized.vendor_params)
+    adapter, cleanup_callbacks = _instantiate_financialdatasets_adapter(normalized.vendor, rest_cfg)
+    pipeline = InsiderTradesIngestionPipeline(
+        adapter=adapter,
+        manifest_base_dir=manifest_base,
     )
 
     try:
