@@ -91,8 +91,14 @@ class RawEquityOHLCVWriter:
 
         file_details = []
         for path, items in shards.items():
-            merged = _merge_with_existing(path, items)
-            result = write_parquet_atomic(merged, path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = path.with_suffix(".lock")
+            _with_lock(lock_path)
+            try:
+                merged = _merge_with_existing(path, items)
+                result = write_parquet_atomic(merged, path)
+            finally:
+                _release_lock(lock_path)
             file_details.append({"path": str(path), "hash": result["file_hash"], "records": len(merged)})
         return {"files": file_details, "total_files": len(file_details)}
 
@@ -608,22 +614,27 @@ class RawFinancialDatasetsWriter:
         dedupe: bool = True,
     ) -> Dict[str, object]:
         path.parent.mkdir(parents=True, exist_ok=True)
-        existing = _read_csv(path)
-        expected = policy.expected_columns or tuple(existing.columns)
-        if expected:
-            new_cols = set(new_rows.columns) - set(expected)
-            if new_cols:
-                LOGGER.warning(
-                    "FinancialDatasets %s encountered new columns: %s",
-                    domain,
-                    ", ".join(sorted(new_cols)),
-                )
-        combined = _union_frames(existing, new_rows)
-        if dedupe:
-            combined = self._dedup_frame(combined, policy, domain)
-        combined = _order_columns(combined, expected)
-        _write_csv(path, combined)
-        file_hash = _compute_file_hash(path)
+        lock_path = path.with_suffix(".lock")
+        _with_lock(lock_path)
+        try:
+            existing = _read_csv(path)
+            expected = policy.expected_columns or tuple(existing.columns)
+            if expected:
+                new_cols = set(new_rows.columns) - set(expected)
+                if new_cols:
+                    LOGGER.warning(
+                        "FinancialDatasets %s encountered new columns: %s",
+                        domain,
+                        ", ".join(sorted(new_cols)),
+                    )
+            combined = _union_frames(existing, new_rows)
+            if dedupe:
+                combined = self._dedup_frame(combined, policy, domain)
+            combined = _order_columns(combined, expected)
+            _write_csv(path, combined)
+            file_hash = _compute_file_hash(path)
+        finally:
+            _release_lock(lock_path)
         return {"path": str(path), "hash": file_hash, "records": int(len(combined))}
 
     def _upsert_single_csv(
@@ -650,9 +661,9 @@ class RawFinancialDatasetsWriter:
             combined = combined.sort_values("ticker", kind="mergesort")
             combined = _order_columns(combined, expected)
             _write_csv(path, combined)
+            file_hash = _compute_file_hash(path)
         finally:
             _release_lock(lock_path)
-        file_hash = _compute_file_hash(path)
         return {"path": str(path), "hash": file_hash, "records": int(len(combined))}
 
     def _dedup_frame(self, df: "pd.DataFrame", policy: DomainPolicy, domain: str) -> "pd.DataFrame":
