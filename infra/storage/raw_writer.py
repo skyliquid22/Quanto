@@ -795,7 +795,7 @@ def _order_columns(frame: "pd.DataFrame", expected: Sequence[str] | tuple[str, .
 
 def _format_date_series(series: "pd.Series") -> "pd.Series":
     data = pd.to_datetime(series, utc=True, errors="coerce").dt.date
-    return data.map(lambda value: value.isoformat() if value is not None else "")
+    return data.map(lambda value: value.isoformat() if pd.notna(value) else "")
 
 
 def _format_datetime_series(series: "pd.Series") -> "pd.Series":
