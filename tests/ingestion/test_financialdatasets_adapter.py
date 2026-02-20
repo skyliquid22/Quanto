@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover - import guard
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from infra.ingestion.adapters import FinancialDatasetsAdapter
+from infra.ingestion.adapters.polygon_equity import RateLimitError
 
 
 class _FakeRESTClient:
@@ -128,3 +129,62 @@ def test_insider_trades_supports_filing_date_filters():
     assert call["params"]["limit"] == "50"
     assert call["params"]["filing_date_gte"] == "2023-01-01"
     assert call["params"]["filing_date_lt"] == "2024-01-01"
+
+
+class _RateLimitRESTClient:
+    """REST client that raises RateLimitError a configurable number of times before succeeding."""
+
+    def __init__(self, fail_count: int, payload: dict, *, retry_after: float | None = None):
+        self._fail_count = fail_count
+        self._payload = payload
+        self._retry_after = retry_after
+        self.attempt_count = 0
+
+    async def get(self, path, params=None):
+        self.attempt_count += 1
+        if self.attempt_count <= self._fail_count:
+            raise RateLimitError("rate limited", retry_after=self._retry_after)
+        return self._payload
+
+
+def test_guarded_fetch_retries_on_rate_limit(monkeypatch):
+    """_guarded_fetch retries after RateLimitError and eventually succeeds."""
+
+    async def noop_sleep(_):
+        pass
+
+    monkeypatch.setattr(asyncio, "sleep", noop_sleep)
+
+    payload = {"company_facts": {"ticker": "AAPL", "name": "Apple"}}
+    client = _RateLimitRESTClient(fail_count=2, payload=payload, retry_after=0)
+    adapter = FinancialDatasetsAdapter(rest_client=client)
+
+    result = asyncio.run(adapter.fetch_company_facts_rest(symbols=("AAPL",), as_of_date=date(2024, 1, 5)))
+
+    assert len(result.records) == 1
+    assert result.records[0]["symbol"] == "AAPL"
+    assert client.attempt_count == 3  # 2 failures + 1 success
+
+
+def test_guarded_fetch_backoff_escalates(monkeypatch):
+    """Backoff delay doubles on each retry, capped at backoff_max."""
+    delays = []
+
+    async def fake_sleep(d):
+        delays.append(d)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    payload = {"company_facts": {"ticker": "AAPL", "name": "Apple"}}
+    client = _RateLimitRESTClient(fail_count=4, payload=payload)
+    adapter = FinancialDatasetsAdapter(
+        rest_client=client,
+        rest_config={"concurrency": 1, "backoff_initial": 1.0, "backoff_multiplier": 2.0, "backoff_max": 5.0},
+    )
+
+    result = asyncio.run(adapter.fetch_company_facts_rest(symbols=("AAPL",), as_of_date=date(2024, 1, 5)))
+
+    assert len(result.records) == 1
+    assert client.attempt_count == 5  # 4 failures + 1 success
+    # Backoff sequence: 1.0, 2.0, 4.0, 5.0 (capped at max)
+    assert delays == [1.0, 2.0, 4.0, 5.0]

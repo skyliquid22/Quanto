@@ -14,6 +14,9 @@ from .polygon_equity import RateLimitError
 DEFAULT_REST_CONFIG: Dict[str, Any] = {
     "concurrency": 4,
     "timeout": 30.0,
+    "backoff_initial": 1.0,
+    "backoff_multiplier": 2.0,
+    "backoff_max": 30.0,
 }
 
 _MAX_LIMITS = {
@@ -213,8 +216,17 @@ class FinancialDatasetsAdapter:
         return aggregated
 
     async def _guarded_fetch(self, symbol: str, handler, semaphore: asyncio.Semaphore) -> FinancialDatasetsAdapterResult:
-        async with semaphore:
-            return await handler(symbol)
+        backoff = float(self.rest_config["backoff_initial"])
+        multiplier = float(self.rest_config["backoff_multiplier"])
+        max_backoff = float(self.rest_config["backoff_max"])
+        while True:
+            try:
+                async with semaphore:
+                    return await handler(symbol)
+            except RateLimitError as err:
+                delay = err.retry_after or backoff
+                await asyncio.sleep(delay)
+                backoff = min(backoff * multiplier, max_backoff)
 
     async def _fetch_company_facts(
         self,
