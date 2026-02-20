@@ -767,7 +767,15 @@ def _read_csv(path: Path) -> "pd.DataFrame":
 
 def _write_csv(path: Path, frame: "pd.DataFrame") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(path, index=False)
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        frame.to_csv(tmp_path, index=False)
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _union_frames(existing: "pd.DataFrame", incoming: "pd.DataFrame") -> "pd.DataFrame":
