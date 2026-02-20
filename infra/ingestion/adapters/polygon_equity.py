@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+
+from infra.timestamps import coerce_timestamp as _coerce_timestamp
 import csv
 import gzip
 import io
@@ -292,31 +294,7 @@ def _safe_float(value: Any, field: str, *, default: float | None = None) -> floa
     return float(value)
 
 
-def _coerce_timestamp(value: Any) -> datetime:
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-    if isinstance(value, (int, float)):
-        # Treat numeric values as epoch milliseconds
-        seconds = float(value) / 1000 if value > 1e12 else float(value)
-        return datetime.fromtimestamp(seconds, tz=timezone.utc)
-    if isinstance(value, str):
-        clean_value = value.strip()
-        if clean_value.endswith("Z"):
-            clean_value = clean_value[:-1] + "+00:00"
-        try:
-            dt = datetime.fromisoformat(clean_value)
-        except ValueError:
-            # interpret YYYY-MM-DD as date
-            if len(clean_value) == 10:
-                dt = datetime.fromisoformat(clean_value + "T00:00:00+00:00")
-            else:
-                raise
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    raise TypeError(f"Unsupported timestamp type {type(value)}")
+# _coerce_timestamp is imported from infra.timestamps (epoch_unit="auto" by default).
 
 
 __all__ = [

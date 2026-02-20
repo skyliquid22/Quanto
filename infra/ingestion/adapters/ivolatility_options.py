@@ -9,7 +9,7 @@ from typing import Any, Iterable, List, Mapping, Sequence
 from infra.validation import validate_records
 
 from ..ivolatility_client import IvolatilityClient
-from .ivolatility_equity import _coerce_timestamp
+from .ivolatility_equity import _coerce_timestamp  # delegates to infra.timestamps(epoch_unit="s")
 from .polygon_options import OptionReferenceIngestionRequest, OptionTimeseriesIngestionRequest
 
 UTC = timezone.utc

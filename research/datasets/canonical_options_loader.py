@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+
+from infra.timestamps import coerce_timestamp as _coerce_timestamp
 import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
@@ -202,19 +204,8 @@ def _coerce_date(value: date | str | None) -> date:
     return date.fromisoformat(str(value))
 
 
-def _coerce_timestamp(value: Any) -> datetime:
-    if hasattr(value, "to_pydatetime"):
-        value = value.to_pydatetime()
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value.astimezone(UTC)
-    if isinstance(value, str):
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=UTC)
-        return parsed.astimezone(UTC)
-    raise ValueError("timestamp is required for canonical options records")
+
+# _coerce_timestamp is imported from infra.timestamps.
 
 
 def _read_records(path: Path) -> List[Mapping[str, Any]]:

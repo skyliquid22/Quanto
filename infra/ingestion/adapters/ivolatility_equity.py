@@ -7,6 +7,9 @@ import io
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
+from functools import partial
+
+from infra.timestamps import coerce_timestamp
 from pathlib import Path
 from typing import Any, Iterable, List, Mapping, Sequence
 
@@ -337,29 +340,7 @@ def _iter_dates(start: date, end: date) -> Iterable[date]:
         current += timedelta(days=1)
 
 
-def _coerce_timestamp(value: Any) -> datetime:
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value.astimezone(UTC)
-    if isinstance(value, date):
-        return datetime(value.year, value.month, value.day, tzinfo=UTC)
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value), tz=UTC)
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            raise ValueError("timestamp string cannot be empty")
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError as exc:
-            raise ValueError(f"Invalid timestamp '{value}'") from exc
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
-        return parsed.astimezone(UTC)
-    raise ValueError("timestamp field missing or unparseable for equity record")
+_coerce_timestamp = partial(coerce_timestamp, epoch_unit="s")
 
 
 __all__ = ["IvolatilityEquityAdapter"]

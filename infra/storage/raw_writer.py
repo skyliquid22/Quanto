@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timezone
+
+from infra.timestamps import coerce_timestamp
 import json
 import logging
 import os
@@ -223,24 +225,7 @@ class RawOptionsWriter:
 
 
 def _coerce_datetime(value: object, index: int | None = None) -> datetime:
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-    if isinstance(value, str):
-        text = value.strip()
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError as exc:  # pragma: no cover - defensive
-            position = f" at index {index}" if index is not None else ""
-            raise TypeError(f"timestamp must be datetime{position}") from exc
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-    position = f" at index {index}" if index is not None else ""
-    raise TypeError(f"timestamp must be datetime{position}")
+    return coerce_timestamp(value, index=index)
 
 
 def _coerce_date(value: object, index: int | None = None) -> date:
