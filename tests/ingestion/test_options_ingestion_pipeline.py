@@ -196,5 +196,42 @@ def test_options_pipeline_records_failure(tmp_path):
 
 
 
+def test_options_pipeline_retries_failed_partitions_on_resume(tmp_path):
+    """Failed partitions in checkpoint should be retried, not skipped."""
+    plan = _build_plan()
+    client = _DeterministicOptionsRestClient()
+    pipeline = _build_pipeline(tmp_path, client)
+
+    # Pre-seed checkpoint with a failed partition for option_contract_reference
+    checkpoint_path = tmp_path / "checkpoints" / "polygon" / "option_contract_reference" / "options-run.json"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.write_text(json.dumps({
+        "run_id": "options-run",
+        "domain": "option_contract_reference",
+        "vendor": "polygon",
+        "partitions": {
+            "ref-1": {
+                "partition_id": "ref-1",
+                "domain": "option_contract_reference",
+                "mode": "rest",
+                "status": "failed",
+                "symbols": ["AAPL"],
+                "source_files": [],
+                "files_written": [],
+                "record_counts": {"requested": 0, "validated": 0},
+                "failures": [{"message": "previous failure"}],
+            }
+        },
+    }))
+
+    manifest = pipeline.run(plan, run_id="options-run")
+    assert manifest["status"] == "succeeded"
+    # The adapter should have been called for the failed reference partition
+    assert client.reference_calls == 1
+    ref_manifest = manifest["domains"]["option_contract_reference"]
+    ref_partition = ref_manifest["partitions"][0]
+    assert ref_partition["status"] == "completed"
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__])

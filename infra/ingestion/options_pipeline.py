@@ -164,7 +164,7 @@ class OptionsIngestionPipeline:
         partition_results: List[Dict[str, Any]] = []
         for partition in partitions:
             existing = stored_partitions.get(partition.partition_id)
-            if existing:
+            if existing and existing.get("status") == "completed":
                 partition_results.append(dict(existing))
                 continue
 
