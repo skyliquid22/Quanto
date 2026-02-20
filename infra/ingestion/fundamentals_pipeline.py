@@ -290,6 +290,7 @@ class FinancialDatasetsRawPipeline:
         creation_ts = self._resolve_creation_timestamp(run_id)
         validation_manifest = None
         records = adapter_result.records
+        validated_count = 0
         if request.domain == "financial_statements":
             validation_config = {
                 "manifest_base_path": self._manifest_dir(request.vendor, request.domain) / "validation",
@@ -304,12 +305,14 @@ class FinancialDatasetsRawPipeline:
                     run_id=run_id,
                     config=validation_config,
                 )
+                validated_count = len(records)
             except ValidationError as exc:
                 manifest = self._build_manifest(
                     request=request,
                     run_id=run_id,
                     mode=mode,
-                    records=records,
+                    records=adapter_result.records,
+                    validated_count=len(exc.validated_records),
                     files_written=[],
                     validation_manifest=exc.manifest.get("manifest_path"),
                     source_payloads=adapter_result.source_payloads,
@@ -328,6 +331,7 @@ class FinancialDatasetsRawPipeline:
             run_id=run_id,
             mode=mode,
             records=records,
+            validated_count=validated_count,
             files_written=files_written,
             validation_manifest=validation_manifest,
             source_payloads=adapter_result.source_payloads,
@@ -413,6 +417,7 @@ class FinancialDatasetsRawPipeline:
         run_id: str,
         mode: Mode,
         records: Sequence[Mapping[str, Any]],
+        validated_count: int,
         files_written: Sequence[Mapping[str, Any]],
         validation_manifest: str | None,
         source_payloads: Sequence[Mapping[str, Any]],
@@ -427,7 +432,7 @@ class FinancialDatasetsRawPipeline:
             "mode": mode,
             "status": status,
             "symbols": list(request.symbols),
-            "record_counts": {"requested": len(records), "validated": len(records)},
+            "record_counts": {"requested": len(records), "validated": validated_count},
             "files_written": list(files_written),
             "source_payloads": list(source_payloads),
             "created_at": created_at,

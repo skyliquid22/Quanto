@@ -114,7 +114,7 @@ class InsiderTradesIngestionPipeline:
             "mode": mode,
             "status": status,
             "symbols": list(request.symbols),
-            "record_counts": {"requested": len(records), "validated": len(records)},
+            "record_counts": {"requested": len(records), "validated": 0},
             "files_written": list(files_written),
             "source_payloads": list(source_payloads),
             "created_at": created_at,
