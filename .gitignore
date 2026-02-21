@@ -37,3 +37,9 @@ notebooks/fundamentals_pipeline_smoke.ipynb
 .runtime/
 .claude/
 .logs/
+
+# Claude Code
+.claude/
+
+# Streamlit
+.streamlit/
