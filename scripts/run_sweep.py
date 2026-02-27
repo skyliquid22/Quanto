@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI for executing deterministic experiment sweeps."""
+"""CLI: Run a Quanto experiment sweep declared in YAML/JSON."""
 
 from __future__ import annotations
 

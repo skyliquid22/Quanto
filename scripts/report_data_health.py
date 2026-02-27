@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic health report for canonical and feature data."""
+"""CLI: Generate deterministic data health reports."""
 
 from __future__ import annotations
 

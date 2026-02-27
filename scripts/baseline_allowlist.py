@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage the baseline execution allowlist."""
+"""CLI: Manage the baseline execution allowlist."""
 
 from __future__ import annotations
 

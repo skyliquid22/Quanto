@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI entrypoint orchestrating Polygon option contract ingestion."""
+"""CLI: Ingest Polygon option contract datasets into raw storage."""
 
 from __future__ import annotations
 

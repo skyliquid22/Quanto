@@ -1,4 +1,4 @@
-"""Migrate FinancialDatasets raw layout to policy-driven CSV layouts."""
+"""CLI: Migrate FinancialDatasets raw layout to CSV policies."""
 from __future__ import annotations
 
 import argparse

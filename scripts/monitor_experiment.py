@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a user-facing experiment metrics report with plots."""
+"""CLI: Render a metrics report for a single experiment."""
 
 from __future__ import annotations
 

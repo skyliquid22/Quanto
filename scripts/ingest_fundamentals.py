@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI entrypoint for fundamentals ingestion runs."""
+"""CLI: Ingest Polygon fundamentals into raw storage."""
 
 from __future__ import annotations
 

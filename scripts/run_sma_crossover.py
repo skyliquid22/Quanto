@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SMA crossover backtest CLI on canonical equity data."""
+"""CLI: Run a deterministic SMA crossover backtest."""
 
 from __future__ import annotations
 

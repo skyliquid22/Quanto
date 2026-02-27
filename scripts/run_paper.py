@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI entrypoint for paper trading validation runs."""
+"""CLI: Prepare and launch Alpaca paper validation runs."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI entrypoint for deterministic equity OHLCV ingestion runs."""
+"""CLI: Ingest Polygon equity OHLCV bars into raw storage."""
 
 from __future__ import annotations
 

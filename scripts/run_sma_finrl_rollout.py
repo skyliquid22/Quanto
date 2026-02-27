@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SMA-driven FinRL rollout producing deterministic monitoring artifacts."""
+"""CLI: Run deterministic SMA rollout in a FinRL-style environment."""
 
 from __future__ import annotations
 

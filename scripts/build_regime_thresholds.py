@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute fixed regime thresholds from a reference window."""
+"""CLI: Build regime v2 threshold configuration."""
 
 from __future__ import annotations
 

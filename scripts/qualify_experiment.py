@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI to evaluate experiment promotion readiness."""
+"""CLI: Qualify an experiment for promotion gating."""
 
 from __future__ import annotations
 

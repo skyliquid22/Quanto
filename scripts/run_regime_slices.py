@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate evaluation timeseries artifacts and compute regime slices for an experiment."""
+"""CLI: Compute regime slices from an experiment rollout."""
 
 from __future__ import annotations
 

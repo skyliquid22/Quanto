@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scheduled paper trading orchestrator."""
+"""CLI: Run scheduled paper trading with lifecycle + alerting."""
 
 from __future__ import annotations
 

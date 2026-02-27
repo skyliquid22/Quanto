@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic v1 release candidate runner (train → qualify → promote → shadow → report)."""
+"""CLI: Run the deterministic v1 PPO release candidate pipeline."""
 
 from __future__ import annotations
 

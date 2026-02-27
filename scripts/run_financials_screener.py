@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Financial Datasets screener queries."""
+"""CLI: Run Financial Datasets financials screener queries."""
 
 from __future__ import annotations
 

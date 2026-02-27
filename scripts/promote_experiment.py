@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI to record immutable experiment promotions."""
+"""CLI: Record an experiment promotion decision."""
 
 from __future__ import annotations
 

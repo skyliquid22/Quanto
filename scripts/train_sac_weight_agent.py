@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train a SAC weight agent on canonical equity data with FinRL-style artifacts."""
+"""CLI: Train a SAC agent on canonical equity features."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train a PPO weight agent on canonical equity data with FinRL-style artifacts."""
+"""CLI: Train a PPO agent on canonical SMA-derived features."""
 
 from __future__ import annotations
 

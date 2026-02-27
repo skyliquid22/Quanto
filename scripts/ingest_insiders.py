@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ingest insider trades into the raw layer and emit a manifest."""
+"""CLI: Ingest Financial Datasets insider trades."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic evaluation CLI for universe rollouts and PPO checkpoints."""
+"""CLI: Compute deterministic evaluation metrics for rollouts and PPO agents."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""High-level CLI for declarative experiments."""
+"""CLI: Run a deterministic Quanto experiment from a spec file."""
 
 from __future__ import annotations
 

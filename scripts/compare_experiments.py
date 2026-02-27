@@ -1,4 +1,4 @@
-"""CLI to compare experiment results and enforce regression gates."""
+"""CLI: Compare Quanto experiments against a baseline."""
 
 from __future__ import annotations
 

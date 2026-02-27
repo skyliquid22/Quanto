@@ -1,3 +1,4 @@
+"""Command-line entrypoint for show traces."""
 from __future__ import annotations
 
 import argparse

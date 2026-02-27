@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified ingestion CLI that routes across vendors and domains."""
+"""CLI: Unified ingestion CLI supporting multiple vendors."""
 
 from __future__ import annotations
 

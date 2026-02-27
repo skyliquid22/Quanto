@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI entrypoint orchestrating canonical reconciliation runs."""
+"""CLI: Build canonical datasets across vendors deterministically."""
 
 from __future__ import annotations
 

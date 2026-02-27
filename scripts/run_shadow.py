@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI entrypoint for the deterministic shadow execution engine."""
+"""CLI: Run promoted experiments in deterministic shadow mode."""
 
 from __future__ import annotations
 
