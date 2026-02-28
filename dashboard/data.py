@@ -93,16 +93,37 @@ def _parse_recorded_at(payload: Mapping[str, Any] | None) -> str | None:
         return None
 
 
-def _extract_reward_version(spec_payload: Mapping[str, Any] | None) -> str | None:
+def _extract_reward_version(spec_payload: Mapping[str, Any] | None, exp_dir: Path) -> str | None:
     if not spec_payload:
-        return None
+        return _extract_reward_version_from_reports(exp_dir)
     policy_params = spec_payload.get("policy_params")
     if isinstance(policy_params, Mapping):
         value = policy_params.get("reward_version")
-        return str(value) if value else None
+        if value:
+            return str(value)
+    report_version = _extract_reward_version_from_reports(exp_dir)
+    if report_version:
+        return report_version
     policy = spec_payload.get("policy")
-    if str(policy).strip().lower() == "ppo":
+    if str(policy).strip().lower() in {"ppo", "sac"}:
         return "reward_v1"
+    return None
+
+
+def _extract_reward_version_from_reports(exp_dir: Path) -> str | None:
+    reports_dir = exp_dir / "logs" / "reports"
+    if not reports_dir.exists():
+        return None
+    candidates = sorted(reports_dir.glob("*_train_*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in candidates:
+        payload = read_json(path)
+        if not payload:
+            continue
+        training = payload.get("training")
+        if isinstance(training, Mapping) and training.get("reward_version"):
+            return str(training["reward_version"])
+        if payload.get("reward_version"):
+            return str(payload["reward_version"])
     return None
 
 
@@ -138,7 +159,7 @@ def load_experiment_summaries(data_root: Path | None = None) -> list[ExperimentS
                 feature_set=spec_payload.get("feature_set"),
                 regime_feature_set=spec_payload.get("regime_feature_set") or None,
                 policy=spec_payload.get("policy"),
-                reward_version=_extract_reward_version(spec_payload),
+                reward_version=_extract_reward_version(spec_payload, exp_dir),
                 start_date=spec_payload.get("start_date"),
                 end_date=spec_payload.get("end_date"),
                 sharpe=_coerce_float(_get_nested(metrics_payload, "performance.sharpe")),
@@ -254,6 +275,32 @@ def _scan_options_surface_dates(domain_root: Path) -> dict[str, set[date]]:
     return symbol_dates
 
 
+def _scan_equity_canonical_dates(domain_root: Path) -> dict[str, set[date]]:
+    symbol_dates: dict[str, set[date]] = {}
+    if not domain_root.exists():
+        return symbol_dates
+    if pd is None:
+        return symbol_dates
+    for path in domain_root.glob("*/daily/*.parquet"):
+        symbol = path.parents[1].name
+        series = None
+        for col in ("date", "timestamp", "ts"):
+            try:
+                frame = pd.read_parquet(path, columns=[col])
+            except Exception:
+                continue
+            if frame is not None and col in frame.columns:
+                series = frame[col]
+                break
+        if series is None:
+            continue
+        dates = pd.to_datetime(series, errors="coerce").dt.date.dropna()
+        if dates.empty:
+            continue
+        symbol_dates.setdefault(symbol, set()).update(dates.tolist())
+    return symbol_dates
+
+
 def _coverage_from_symbol_dates(symbol_dates: Mapping[str, set[date]]) -> dict[str, Any]:
     if not symbol_dates:
         return {"symbols": 0, "min_date": None, "max_date": None, "coverage": None}
@@ -298,6 +345,9 @@ def load_domain_coverage(data_root: Path | None = None) -> dict[str, dict[str, A
                 "max_date": max_date,
                 "coverage": coverage_pct,
             }
+    if "equity_ohlcv" not in coverage:
+        equity_root = root / "canonical" / "equity_ohlcv"
+        coverage["equity_ohlcv"] = _coverage_from_symbol_dates(_scan_equity_canonical_dates(equity_root))
 
     fundamentals_root = root / "canonical" / "fundamentals"
     coverage["fundamentals"] = _coverage_from_symbol_dates(_scan_partitioned_dates(fundamentals_root))
