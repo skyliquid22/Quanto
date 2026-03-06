@@ -148,6 +148,7 @@ class SignalWeightTradingEnv:
             )
             executed_weights = list(exec_result.executed_weights)
             exec_info.update(exec_result.to_info())
+            exec_info["execution_sim_summary"] = self._execution_simulator.snapshot()
 
         trade_notional = [
             (executed_weights[idx] - prev_weights[idx]) * prev_value for idx in range(self._num_assets)

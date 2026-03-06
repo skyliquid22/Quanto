@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, MutableMapping, Sequence
 
 
@@ -66,12 +66,61 @@ class ExecutionSimResult:
     missed_fill_ratio: float
     unfilled_notional: float
     order_type_counts: Dict[str, int]
+    total_target_notional: float
+    filled_notional: float
+    fill_ratio: float
+    execution_sim_enabled: bool
 
     def to_info(self) -> Dict[str, Any]:
         return {
             "execution_slippage_bps": float(self.execution_slippage_bps),
             "missed_fill_ratio": float(self.missed_fill_ratio),
             "unfilled_notional": float(self.unfilled_notional),
+            "order_type_counts": dict(self.order_type_counts),
+            "filled_notional": float(self.filled_notional),
+            "total_target_notional": float(self.total_target_notional),
+            "execution_fill_ratio": float(self.fill_ratio),
+            "execution_sim_enabled": bool(self.execution_sim_enabled),
+        }
+
+
+@dataclass
+class _ExecutionSimStats:
+    steps: int = 0
+    target_notional: float = 0.0
+    filled_notional: float = 0.0
+    unfilled_notional: float = 0.0
+    slippage_notional: float = 0.0
+    order_type_counts: Counter[str] = field(default_factory=Counter)
+
+    def record(
+        self,
+        *,
+        target_notional: float,
+        filled_notional: float,
+        unfilled_notional: float,
+        slippage_notional: float,
+        order_type_counts: Counter[str],
+    ) -> None:
+        self.steps += 1
+        self.target_notional += float(target_notional)
+        self.filled_notional += float(filled_notional)
+        self.unfilled_notional += float(unfilled_notional)
+        self.slippage_notional += float(slippage_notional)
+        self.order_type_counts.update(order_type_counts)
+
+    def snapshot(self) -> Dict[str, Any]:
+        fill_ratio = self.filled_notional / self.target_notional if self.target_notional > 0 else 1.0
+        avg_slippage_bps = (
+            (self.slippage_notional / self.filled_notional) * 10_000.0 if self.filled_notional > 0 else 0.0
+        )
+        return {
+            "steps": int(self.steps),
+            "target_notional": float(self.target_notional),
+            "filled_notional": float(self.filled_notional),
+            "unfilled_notional": float(self.unfilled_notional),
+            "fill_ratio": float(fill_ratio),
+            "avg_slippage_bps": float(avg_slippage_bps),
             "order_type_counts": dict(self.order_type_counts),
         }
 
@@ -181,6 +230,7 @@ class ExecutionSimulator:
         self._symbols = tuple(symbols)
         self._config = config
         self._trailing_anchor: Dict[str, float | None] = {symbol: None for symbol in self._symbols}
+        self._stats = _ExecutionSimStats()
 
     def resolve_step(
         self,
@@ -199,6 +249,10 @@ class ExecutionSimulator:
                 missed_fill_ratio=0.0,
                 unfilled_notional=0.0,
                 order_type_counts={},
+                total_target_notional=0.0,
+                filled_notional=0.0,
+                fill_ratio=1.0,
+                execution_sim_enabled=False,
             )
 
         if isinstance(execution_action, str):
@@ -276,6 +330,14 @@ class ExecutionSimulator:
         execution_slippage_bps = (
             (slippage_notional / filled_notional) * 10_000.0 if filled_notional > 0 else 0.0
         )
+        fill_ratio = filled_notional / total_target_notional if total_target_notional > 0 else 1.0
+        self._stats.record(
+            target_notional=total_target_notional,
+            filled_notional=filled_notional,
+            unfilled_notional=unfilled_notional,
+            slippage_notional=slippage_notional,
+            order_type_counts=order_type_counts,
+        )
 
         return ExecutionSimResult(
             executed_weights=tuple(executed),
@@ -283,10 +345,18 @@ class ExecutionSimulator:
             missed_fill_ratio=missed_fill_ratio,
             unfilled_notional=unfilled_notional,
             order_type_counts=dict(order_type_counts),
+            total_target_notional=total_target_notional,
+            filled_notional=filled_notional,
+            fill_ratio=fill_ratio,
+            execution_sim_enabled=True,
         )
 
     def reset(self) -> None:
         self._trailing_anchor = {symbol: None for symbol in self._symbols}
+        self._stats = _ExecutionSimStats()
+
+    def snapshot(self) -> Dict[str, Any]:
+        return self._stats.snapshot()
 
     def _resolve_instruction(
         self,
