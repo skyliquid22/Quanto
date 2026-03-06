@@ -333,17 +333,31 @@ def build_paper_execution_controller(
 ) -> PaperExecutionController:
     """Convenience helper mirroring ExecutionController construction."""
 
+    base_risk = ExecutionRiskConfig(
+        max_gross_exposure=risk_limits.max_gross_exposure,
+        min_cash_pct=risk_limits.min_cash_pct,
+        max_symbol_weight=risk_limits.max_symbol_weight,
+        max_daily_turnover=risk_limits.max_turnover,
+        max_trailing_drawdown=risk_limits.max_drawdown,
+    )
+    try:
+        policy_cfg = ExecutionRiskConfig.from_policy_file(None)
+        base_risk = ExecutionRiskConfig(
+            max_gross_exposure=policy_cfg.max_gross_exposure or base_risk.max_gross_exposure,
+            min_cash_pct=policy_cfg.min_cash_pct or base_risk.min_cash_pct,
+            max_symbol_weight=policy_cfg.max_symbol_weight or base_risk.max_symbol_weight,
+            max_daily_turnover=policy_cfg.max_daily_turnover or base_risk.max_daily_turnover,
+            max_active_positions=policy_cfg.max_active_positions or base_risk.max_active_positions,
+            max_daily_loss=policy_cfg.max_daily_loss or base_risk.max_daily_loss,
+            max_trailing_drawdown=policy_cfg.max_trailing_drawdown or base_risk.max_trailing_drawdown,
+        )
+    except Exception:
+        pass
     controller_config = ExecutionControllerConfig(
         run_id="paper",
         symbol_order=symbol_order,
         order_config=None,
-        risk_config=ExecutionRiskConfig(
-            max_gross_exposure=risk_limits.max_gross_exposure,
-            min_cash_pct=risk_limits.min_cash_pct,
-            max_symbol_weight=risk_limits.max_symbol_weight,
-            max_daily_turnover=risk_limits.max_turnover,
-            max_trailing_drawdown=risk_limits.max_drawdown,
-        ),
+        risk_config=base_risk,
     )
     return PaperExecutionController(
         broker=broker,

@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from typing import Mapping, Sequence
+
+try:  # pragma: no cover - PyYAML is optional
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover
+    yaml = None
 
 from research.execution.orders import TOLERANCE, stable_symbol_weights
 from research.execution.types import Order, RiskCheckResult
+
+
+DEFAULT_RISK_POLICY_PATH = Path(__file__).resolve().parents[2] / "configs" / "risk.yml"
 
 
 @dataclass(frozen=True)
@@ -31,6 +41,35 @@ class ExecutionRiskConfig:
             max_active_positions=int(payload["max_active_positions"]) if payload.get("max_active_positions") else None,
             max_daily_loss=_maybe_float(payload.get("max_daily_loss")),
             max_trailing_drawdown=_maybe_float(payload.get("max_trailing_drawdown")),
+        )
+
+    @classmethod
+    def from_policy_file(cls, path: str | Path | None) -> "ExecutionRiskConfig":
+        resolved = Path(path) if path else DEFAULT_RISK_POLICY_PATH
+        if not resolved.exists():
+            raise FileNotFoundError(f"Risk policy not found: {resolved}")
+        payload = _read_policy_payload(resolved)
+        if not isinstance(payload, Mapping):
+            raise ValueError("Risk policy payload must be a mapping")
+        return cls.from_policy_payload(payload)
+
+    @classmethod
+    def from_policy_payload(cls, payload: Mapping[str, object]) -> "ExecutionRiskConfig":
+        exposure = payload.get("exposure") if isinstance(payload.get("exposure"), Mapping) else {}
+        position_limits = payload.get("position_limits") if isinstance(payload.get("position_limits"), Mapping) else {}
+        liquidity = payload.get("liquidity") if isinstance(payload.get("liquidity"), Mapping) else {}
+        loss_controls = payload.get("loss_controls") if isinstance(payload.get("loss_controls"), Mapping) else {}
+
+        max_daily_loss = _abs_ratio(loss_controls.get("max_daily_loss"))
+        max_drawdown = _abs_ratio(loss_controls.get("max_drawdown"))
+
+        return cls(
+            max_gross_exposure=_maybe_float(exposure.get("max_gross_exposure")),
+            max_symbol_weight=_maybe_float(position_limits.get("max_position_pct_nav")),
+            max_daily_turnover=_maybe_float(liquidity.get("max_daily_turnover")),
+            max_active_positions=_maybe_int(exposure.get("max_positions")),
+            max_daily_loss=max_daily_loss,
+            max_trailing_drawdown=max_drawdown,
         )
 
 
@@ -207,9 +246,43 @@ def _maybe_float(value: object) -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+    return float(value)
+
+
+def _maybe_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None
 
 
-__all__ = ["ExecutionRiskConfig", "ExecutionRiskEngine"]
+def _abs_ratio(value: object) -> float | None:
+    number = _maybe_float(value)
+    if number is None:
+        return None
+    return abs(number)
+
+
+def _read_policy_payload(path: Path) -> Mapping[str, object]:
+    text = path.read_text(encoding="utf-8")
+    suffix = path.suffix.lower()
+    if suffix in {".yaml", ".yml"}:
+        if yaml is None:
+            raise RuntimeError("PyYAML must be installed to read risk policy files")
+        loaded = yaml.safe_load(text)
+        if loaded is None:
+            raise ValueError("Risk policy file is empty")
+        if not isinstance(loaded, Mapping):
+            raise ValueError("Risk policy file must be a mapping")
+        return loaded
+    data = json.loads(text)
+    if not isinstance(data, Mapping):
+        raise ValueError("Risk policy file must be a mapping")
+    return data
+    except (TypeError, ValueError):
+        return None
+
+
+__all__ = ["DEFAULT_RISK_POLICY_PATH", "ExecutionRiskConfig", "ExecutionRiskEngine"]

@@ -518,6 +518,19 @@ class ShadowEngine:
             max_daily_turnover=spec_cfg.max_turnover_1d,
             max_active_positions=len(self._symbol_order),
         )
+        try:
+            policy_cfg = ExecutionRiskConfig.from_policy_file(None)
+            base = ExecutionRiskConfig(
+                max_gross_exposure=_override(policy_cfg.max_gross_exposure, base.max_gross_exposure),
+                min_cash_pct=_override(policy_cfg.min_cash_pct, base.min_cash_pct),
+                max_symbol_weight=_override(policy_cfg.max_symbol_weight, base.max_symbol_weight),
+                max_daily_turnover=_override(policy_cfg.max_daily_turnover, base.max_daily_turnover),
+                max_active_positions=int(_override(policy_cfg.max_active_positions, base.max_active_positions) or 0) or base.max_active_positions,
+                max_daily_loss=_override(policy_cfg.max_daily_loss, base.max_daily_loss),
+                max_trailing_drawdown=_override(policy_cfg.max_trailing_drawdown, base.max_trailing_drawdown),
+            )
+        except Exception:
+            pass
         overrides_payload = self._execution_options.get("risk_overrides") or {}
         if not overrides_payload:
             return base
