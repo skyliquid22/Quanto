@@ -26,14 +26,9 @@ class DomainPolicy:
 def load_financialdatasets_policies(config_path: Path | str | None = None) -> Dict[str, DomainPolicy]:
     path = Path(config_path) if config_path is not None else get_repo_root() / "configs" / "data_sources.yml"
     text = path.read_text()
-    if path.suffix.lower() in {".yml", ".yaml"}:
-        if not yaml:
-            raise RuntimeError("PyYAML must be installed to parse data_sources.yml")
-        data = yaml.safe_load(text)
-    else:
-        import json
-
-        data = json.loads(text)
+    if not yaml:
+        raise RuntimeError("PyYAML must be installed to parse data_sources.yml")
+    data = yaml.safe_load(text)
     return extract_financialdatasets_policies(data)
 
 
