@@ -1,5 +1,5 @@
 sweep_name: core_v1_regime_smoke
-base_spec:
+base_experiment_spec:
   experiment_name: core_v1_sweep
   symbols: [
       "AAPL", "MSFT", "NVDA", "AVGO", "ORCL",
@@ -27,8 +27,10 @@ base_spec:
     max_turnover_1d: 0.4
   seed: 42
   notes: "core_v1 regime smoke sweep"
-dimensions:
-  - field_path: policy
-    values: ["equal_weight", "ppo"]
-  - field_path: feature_set
-    values: ["core_v1", "core_v1_regime"]
+sweep_dimensions:
+  policy:
+    - "equal_weight"
+    - "ppo"
+  feature_set:
+    - "core_v1"
+    - "core_v1_regime"
