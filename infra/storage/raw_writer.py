@@ -485,7 +485,8 @@ class RawFinancialDatasetsWriter:
         df = self._ensure_ticker(df)
         df = self._normalize_date_columns(df, policy)
         path = vendor_root / domain / "Facts.csv"
-        return self._upsert_single_csv(path, df, policy)
+        detail = self._upsert_single_csv(path, df, policy)
+        return {"files": [detail], "total_files": 1}
 
     def _write_snapshot_table(
         self,

@@ -69,6 +69,20 @@ def test_financial_statements_raw_can_canonicalize(tmp_path: Path):
     )
 
     config = {
+        "vendors": [
+            {
+                "name": "financialdatasets",
+                "domains": ["fundamentals", "financial_statements"],
+                "raw_storage_policy": {
+                    "financial_statements": {
+                        "policy": "timeseries_csv_unsharded",
+                        "date_priority": ["report_date"],
+                        "date_kind": "date",
+                        "dedup_keys": ["ticker", "report_date", "statement_type"],
+                    }
+                },
+            }
+        ],
         "reconciliation": {
             "domains": {
                 "fundamentals": {
@@ -76,7 +90,7 @@ def test_financial_statements_raw_can_canonicalize(tmp_path: Path):
                     "fundamentals_of_record": "financialdatasets",
                 }
             }
-        }
+        },
     }
     builder = ReconciliationBuilder(
         config,
