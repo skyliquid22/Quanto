@@ -1,3 +1,0 @@
-# FinRL environment configuration
-env:
-  name: "FinRLStockTradingEnv"
