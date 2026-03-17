@@ -246,7 +246,9 @@ def _maybe_float(value: object) -> float | None:
     if value is None:
         return None
     try:
-    return float(value)
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _maybe_int(value: object) -> int | None:
@@ -281,8 +283,6 @@ def _read_policy_payload(path: Path) -> Mapping[str, object]:
     if not isinstance(data, Mapping):
         raise ValueError("Risk policy file must be a mapping")
     return data
-    except (TypeError, ValueError):
-        return None
 
 
 __all__ = ["DEFAULT_RISK_POLICY_PATH", "ExecutionRiskConfig", "ExecutionRiskEngine"]
