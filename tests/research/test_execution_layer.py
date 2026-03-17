@@ -199,7 +199,7 @@ def shadow_env(tmp_path, monkeypatch):
                 execution_mode=execution_mode,
                 execution_options={
                     "order_config": {"min_notional": 0.0},
-                    "risk_overrides": {"max_active_positions": len(symbols)},
+                    "risk_overrides": {"max_active_positions": len(symbols), "max_daily_turnover": 2.0},
                 },
             )
 
