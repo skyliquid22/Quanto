@@ -93,7 +93,7 @@ class EqualWeightPolicy:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     config_parser = argparse.ArgumentParser(add_help=False)
-    config_parser.add_argument("--config", help="Optional eval config (YAML or JSON).")
+    config_parser.add_argument("--config", help="Optional eval config (YAML).")
     known, _ = config_parser.parse_known_args(argv)
     defaults = _load_config_defaults(known.config)
 

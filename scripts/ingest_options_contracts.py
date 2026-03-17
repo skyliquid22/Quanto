@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest Polygon option contract datasets into raw storage.")
-    parser.add_argument("--config", required=True, help="Path to JSON or YAML config describing the run plan.")
+    parser.add_argument("--config", required=True, help="Path to YAML config describing the run plan.")
     parser.add_argument("--run-id", required=True, help="Deterministic run identifier shared across domains.")
     parser.add_argument(
         "--data-root",

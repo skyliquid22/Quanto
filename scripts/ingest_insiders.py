@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest Financial Datasets insider trades.")
-    parser.add_argument("--config", required=True, help="Path to JSON or YAML config describing the ingest run.")
+    parser.add_argument("--config", required=True, help="Path to YAML config describing the ingest run.")
     parser.add_argument("--run-id", help="Optional deterministic run identifier.")
     parser.add_argument("--data-root", help="Optional override for runtime data root.")
     parser.add_argument("--mode", choices=("rest",), default="rest", help="Ingestion mode (rest only).")

@@ -8,7 +8,7 @@ spec = CommandSpec(
     module="scripts.run_sweep",
     usage="run-sweep --sweep <path> [--force]",
     params=(
-        ParamSpec("--sweep", "path", "Sweep spec file (YAML or JSON).", required=True),
+        ParamSpec("--sweep", "path", "Sweep spec file (YAML).", required=True),
         ParamSpec("--force", "flag", "Re-run experiments even if registry already has results."),
     ),
     returns="Console summary plus artifacts under .quanto_data/experiments/sweeps/<sweep_name>/.",

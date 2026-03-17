@@ -78,7 +78,7 @@ FINANCIALDATASETS_RAW_DOMAINS = {
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Unified ingestion CLI supporting multiple vendors.")
-    parser.add_argument("--config", required=True, help="Path to JSON or YAML config describing the ingestion run.")
+    parser.add_argument("--config", required=True, help="Path to YAML config describing the ingestion run.")
     parser.add_argument("--domain", required=True, choices=sorted(SUPPORTED_DOMAINS), help="Canonical domain to ingest.")
     parser.add_argument("--run-id", help="Optional deterministic run identifier. Auto-generated when omitted.")
     parser.add_argument("--data-root", help="Optional override for runtime data root.")

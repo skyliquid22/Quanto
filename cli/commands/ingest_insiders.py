@@ -8,7 +8,7 @@ spec = CommandSpec(
     module="scripts.ingest_insiders",
     usage="ingest-insiders --config <path> [--run-id <id>] [--data-root <path>] [--force] [--dry-run]",
     params=(
-        ParamSpec("--config", "path", "Ingestion config file (YAML or JSON).", required=True),
+        ParamSpec("--config", "path", "Ingestion config file (YAML).", required=True),
         ParamSpec("--run-id", "str", "Optional deterministic run id."),
         ParamSpec("--data-root", "path", "Override QUANTO data root."),
         ParamSpec("--force", "flag", "Overwrite existing manifest for run-id."),

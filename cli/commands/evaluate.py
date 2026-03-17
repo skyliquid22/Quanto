@@ -8,7 +8,7 @@ spec = CommandSpec(
     module="scripts.evaluate_agent",
     usage="evaluate --start-date YYYY-MM-DD --end-date YYYY-MM-DD [--config <path>] [--symbol <sym>] [--symbols <sym,...>] [--feature-set <name>] [--regime-labeling v1|v2] [--policy <name>] [--checkpoint <path>] [--out-dir <path>]",
     params=(
-        ParamSpec("--config", "path", "Optional eval config (YAML or JSON)."),
+        ParamSpec("--config", "path", "Optional eval config (YAML)."),
         ParamSpec("--symbol", "str", "Single symbol (default: AAPL).", default="AAPL"),
         ParamSpec("--symbols", "str", "Universe symbols (comma separated, repeat flag)."),
         ParamSpec("--start-date", "date", "Inclusive start date (YYYY-MM-DD).", required=True),

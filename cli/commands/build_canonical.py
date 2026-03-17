@@ -8,7 +8,7 @@ spec = CommandSpec(
     module="scripts.build_canonical_datasets",
     usage="build-canonical --start-date YYYY-MM-DD --end-date YYYY-MM-DD [--config <path>] [--domains <domain ...>] [--run-id <id>] [--raw-root <path>] [--canonical-root <path>] [--manifest-root <path>] [--metrics-root <path>]",
     params=(
-        ParamSpec("--config", "path", "Data sources config file (YAML or JSON).", default="configs/data_sources.yml"),
+        ParamSpec("--config", "path", "Data sources config file (YAML).", default="configs/data_sources.yml"),
         ParamSpec("--domains", "list[str]", "Optional domain list (default: all configured)."),
         ParamSpec("--start-date", "date", "Inclusive start date (YYYY-MM-DD).", required=True),
         ParamSpec("--end-date", "date", "Inclusive end date (YYYY-MM-DD).", required=True),

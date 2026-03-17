@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest Polygon equity OHLCV bars into raw storage.")
-    parser.add_argument("--config", required=True, help="Path to JSON or YAML config describing the run.")
+    parser.add_argument("--config", required=True, help="Path to YAML config describing the run.")
     parser.add_argument("--run-id", required=True, help="Deterministic run identifier.")
     parser.add_argument(
         "--mode",

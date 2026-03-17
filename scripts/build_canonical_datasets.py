@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         default="configs/data_sources.yml",
-        help="Path to the data sources configuration file (YAML or JSON).",
+        help="Path to the data sources configuration file (YAML).",
     )
     parser.add_argument(
         "--domains",

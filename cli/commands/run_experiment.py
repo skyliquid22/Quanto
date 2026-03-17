@@ -8,9 +8,9 @@ spec = CommandSpec(
     module="scripts.run_experiment",
     usage="run-experiment --spec <path> [--force]",
     params=(
-        ParamSpec("--spec", "path", "Experiment spec file (YAML or JSON).", required=True),
+        ParamSpec("--spec", "path", "Experiment spec file (YAML).", required=True),
         ParamSpec("--force", "flag", "Re-run even if experiment ID exists (registry reset)."),
     ),
     returns="JSON payload to stdout with experiment_id and artifact paths.",
-    example="run-experiment --spec configs/experiments/core_v1_regime_slices_ppo.json",
+    example="run-experiment --spec configs/experiments/core_v1_regime_slices_ppo.yml",
 )

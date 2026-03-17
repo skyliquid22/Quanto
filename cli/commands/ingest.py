@@ -8,7 +8,7 @@ spec = CommandSpec(
     module="scripts.ingest",
     usage="ingest --config <path> --domain <domain> [--mode auto|rest|flat_file] [--run-id <id>] [--data-root <path>] [--force] [--dry-run]",
     params=(
-        ParamSpec("--config", "path", "Ingestion config file (YAML or JSON).", required=True),
+        ParamSpec("--config", "path", "Ingestion config file (YAML).", required=True),
         ParamSpec("--domain", "str", "Domain to ingest (e.g., equity_ohlcv).", required=True),
         ParamSpec(
             "--mode",

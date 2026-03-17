@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest Polygon fundamentals into raw storage.")
-    parser.add_argument("--config", required=True, help="Path to JSON or YAML config file.")
+    parser.add_argument("--config", required=True, help="Path to YAML config file.")
     parser.add_argument("--run-id", required=True, help="Deterministic run identifier.")
     parser.add_argument(
         "--mode",

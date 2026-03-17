@@ -33,7 +33,7 @@ ReleaseSummary = Mapping[str, Any]
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the deterministic v1 PPO release candidate pipeline.")
-    parser.add_argument("--spec", required=True, help="Path to the experiment spec (JSON or YAML).")
+    parser.add_argument("--spec", required=True, help="Path to the experiment spec (YAML).")
     parser.add_argument("--baseline", required=True, help="Baseline identifier (experiment id, name, or latest:name).")
     parser.add_argument("--data-root", help="Override QUANTO_DATA_ROOT for this run.")
     parser.add_argument("--registry-root", help="Override the experiment registry root.")

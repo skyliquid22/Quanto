@@ -263,7 +263,7 @@ evidence, not optimization.
 
 ## Config Anatomy (Experiment Spec)
 
-Configs can be YAML or JSON. Below is an annotated YAML example.
+Configs are YAML files. Below is an annotated example.
 
 ```yaml
 name: core_v1_regime_ppo_demo
@@ -334,7 +334,7 @@ ingest: Ingest raw vendor data into .quanto_data/raw using a config file.
 Usage:
   ingest --config <path> --domain <domain> [--mode auto|rest|flat_file] [--run-id <id>] [--data-root <path>] [--force] [--dry-run]
 Parameters:
-  --config (path, required) - Ingestion config file (YAML or JSON).
+  --config (path, required) - Ingestion config file (YAML).
   --domain (str, required) - Domain to ingest (e.g., equity_ohlcv).
   --mode (str, optional, default=auto) - Force ingestion mode (auto, rest, flat_file).
   --run-id (str, optional) - Optional deterministic run id.
@@ -391,7 +391,7 @@ quanto> build-canonical --start-date 2022-01-01 --end-date 2025-12-31 --domains 
 
 Run an experiment from a spec:
 ```text
-quanto> run-experiment --spec configs/experiments/core_v1_regime_slices_ppo.json
+quanto> run-experiment --spec configs/experiments/core_v1_regime_slices_ppo.yml
 ```
 
 Run a sweep (multi‑experiment grid):

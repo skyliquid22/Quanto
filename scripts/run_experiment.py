@@ -22,7 +22,7 @@ from research.experiments import (
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a deterministic Quanto experiment from a spec file.")
-    parser.add_argument("--spec", required=True, help="Path to the experiment spec (YAML or JSON).")
+    parser.add_argument("--spec", required=True, help="Path to the experiment spec (YAML).")
     parser.add_argument(
         "--force",
         action="store_true",
