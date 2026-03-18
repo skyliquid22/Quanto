@@ -1,0 +1,57 @@
+name: "Example Stress Test Configuration"
+experiment_id: "stress_example_001"
+experiment_file: "configs/experiments/core_v1_regime_sac_smoke.yml"
+
+scenarios:
+  - name: "2020 Crash Regime"
+    type: historical_regime
+    historical_regime:
+      regime_version: "v1"
+      regime_filter: "crash"
+      min_period_days: 90
+
+  - name: "2008 GFC High Volatility"
+    type: historical_regime
+    historical_regime:
+      regime_version: "v1"
+      regime_filter: "high_vol"
+      min_period_days: 180
+
+  - name: "10% Instant Shock"
+    type: synthetic
+    synthetic:
+      mutation: "shock"
+      magnitude: -0.10
+      duration_days: 5
+      inject_at: "2025-01-01"
+
+  - name: "Volatility Spike 2x"
+    type: synthetic
+    synthetic:
+      mutation: "volatility_spike"
+      factor: 2.0
+      duration_days: 30
+      inject_at: "portfolio_rebalance"
+
+gates:
+  drawdown:
+    enabled: true
+    thresholds:
+      max_drawdown: 0.15
+      warning_threshold: 0.10
+
+  var_limit:
+    enabled: true
+    thresholds:
+      var_95: 0.05
+      var_99: 0.08
+
+  liquidity:
+    enabled: false
+    thresholds:
+      min_daily_volume: 1000000
+
+seeds:
+  - 42
+  - 123
+  - 456
