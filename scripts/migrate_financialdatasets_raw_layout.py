@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -199,7 +199,7 @@ def migrate_to_staging(
     staging_root = _staging_root(vendor_root)
     report: Dict[str, Any] = {
         "vendor": "financialdatasets",
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat() + "Z",
         "phase": "dry_run" if dry_run else "stage",
         "domains": {},
         "file_map": [],
@@ -441,7 +441,7 @@ def promote_staging(
             )
     report_out: Dict[str, Any] = {
         "vendor": "financialdatasets",
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat() + "Z",
         "phase": "promote",
         "files_removed": [],
         "manifest_updates": [],

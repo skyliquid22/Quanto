@@ -4,7 +4,7 @@ import os
 import shlex
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Sequence
 
@@ -55,7 +55,7 @@ def _ensure_log_dir(repo_root: Path) -> Path:
 
 
 def _log_path(repo_root: Path, command_name: str) -> Path:
-    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     return _ensure_log_dir(repo_root) / f"{stamp}_{command_name}.log"
 
 
@@ -78,14 +78,22 @@ def _run_python_module(spec: CommandSpec, args: Sequence[str], context: CommandC
         return CommandResult(exit_code=2, stdout="", stderr=message)
     if not spec.module:
         return CommandResult(exit_code=2, stdout="", stderr="Command is missing a module binding.")
+    python_path = Path(context.python_path)
+    if not python_path.exists():
+        return CommandResult(exit_code=2, stdout="", stderr=f"PYTHON path does not exist: {context.python_path}")
+    if not os.access(context.python_path, os.X_OK):
+        return CommandResult(exit_code=2, stdout="", stderr=f"PYTHON is not executable: {context.python_path}")
     cmd = [context.python_path, "-m", spec.module, *args]
-    result = subprocess.run(
-        cmd,
-        cwd=str(context.repo_root),
-        env={**os.environ, "PYTHONPATH": str(context.repo_root)},
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(context.repo_root),
+            env={**os.environ, "PYTHONPATH": str(context.repo_root)},
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return CommandResult(exit_code=2, stdout="", stderr=f"PYTHON binary not found: {context.python_path}")
     return CommandResult(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr)
 
 
@@ -146,8 +154,12 @@ def _handle_line(raw: str, context: CommandContext) -> None:
     result = _run_command(spec, args, context)
     if result.stdout:
         sys.stdout.write(result.stdout)
+        if not result.stdout.endswith("\n"):
+            sys.stdout.write("\n")
     if result.stderr:
         sys.stderr.write(result.stderr)
+        if not result.stderr.endswith("\n"):
+            sys.stderr.write("\n")
     if spec.module:
         command_line = f"{context.python_path or 'PYTHON'} -m {spec.module} {' '.join(args)}".strip()
     else:
