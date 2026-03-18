@@ -155,7 +155,10 @@ class ExecutionRiskEngine:
             prev = prev_weights[idx] if idx < len(prev_weights) else 0.0
             turnover += abs(target_weights.get(symbol, 0.0) - prev)
         snapshot["turnover"] = float(turnover)
-        if cfg.max_daily_turnover is not None and turnover > cfg.max_daily_turnover + TOLERANCE:
+        # Skip turnover check for initial allocation (all prev_weights are zero)
+        prev_weights_sum = sum(abs(prev) for prev in prev_weights)
+        is_initial_allocation = prev_weights_sum <= TOLERANCE
+        if cfg.max_daily_turnover is not None and not is_initial_allocation and turnover > cfg.max_daily_turnover + TOLERANCE:
             return True, "TURNOVER_LIMIT"
         return False, None
 
