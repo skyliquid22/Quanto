@@ -11,6 +11,7 @@ def main() -> None:
     p.add_argument("--log", default="monitoring/logs/task_ledger.jsonl")
     p.add_argument("--tail", type=int, default=20)
     p.add_argument("--contains", default=None)
+    p.add_argument("--status", choices=["succeeded", "failed"], default=None)
     args = p.parse_args()
 
     path = Path(args.log)
@@ -27,6 +28,9 @@ def main() -> None:
         except json.JSONDecodeError:
             continue
 
+        if args.status and obj.get("status") != args.status:
+            continue
+
         if args.contains:
             hay = (obj.get("task","") + "\n" + obj.get("response","")).lower()
             if args.contains.lower() not in hay:
@@ -34,12 +38,14 @@ def main() -> None:
 
         ts = obj.get("ts", "")
         init = obj.get("initializer", "")
-        to = obj.get("recipient", "")
-        rid = obj.get("run_id", "")
+        status = obj.get("status", "")
+        duration = obj.get("duration_s")
         tid = obj.get("task_id", "")
         title = obj.get("task_title", "")
         err = obj.get("error")
-        print(f"- {ts} | {init} -> {to} | run={rid} | task_id={tid} | {title}")
+
+        duration_str = f"{duration:.1f}s" if duration is not None else ""
+        print(f"- {ts} | {init} | {status} | {duration_str} | {title}")
         if err:
             print(f"  ERROR: {err}")
 
