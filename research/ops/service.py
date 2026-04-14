@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from monitoring.trace_emitter import emit_trace
 from research.ops.alerts import AlertEmitter
 from research.ops.config import OpsConfig
 from research.ops.lifecycle import RunLifecycleTracker
@@ -90,8 +92,30 @@ class PaperRunOrchestrator:
             backoff_config=self._ops_config.paper_trading.backoff,
             runbook_url=self._ops_config.paper_trading.runbook_url,
         )
-        run_result = executor.execute(
-            lambda: self._execute_run(decision.run_id, decision.scheduled_for, lifecycle)
+        _t0 = time.monotonic()
+        _run_error: str | None = None
+        try:
+            run_result = executor.execute(
+                lambda: self._execute_run(decision.run_id, decision.scheduled_for, lifecycle)
+            )
+        except Exception as exc:
+            _run_error = str(exc)
+            emit_trace(
+                initializer="paper_orchestrator",
+                task_title=f"paper run {self._paper_config.experiment_id}",
+                run_id=decision.run_id,
+                status="failed",
+                error=_run_error,
+                duration_s=time.monotonic() - _t0,
+            )
+            raise
+        emit_trace(
+            initializer="paper_orchestrator",
+            task_title=f"paper run {self._paper_config.experiment_id}",
+            run_id=decision.run_id,
+            status="succeeded",
+            duration_s=time.monotonic() - _t0,
+            artifacts=[run_result.get("run_dir")] if run_result.get("run_dir") else None,
         )
         summaries = self._write_summary(
             lifecycle,

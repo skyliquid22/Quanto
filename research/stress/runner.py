@@ -23,12 +23,14 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from monitoring.trace_emitter import emit_trace
 from research.experiments.registry import ExperimentRegistry
 from research.experiments.spec import ExperimentSpec
 from research.shadow.data_source import ReplayMarketDataSource
@@ -114,6 +116,7 @@ class StressTestRunner:
         if run_dir.exists():
             shutil.rmtree(run_dir)
 
+        t0 = time.monotonic()
         try:
             data_source = self._build_data_source(scenario)
             engine = self._build_engine(data_source, run_id, run_dir)
@@ -121,6 +124,14 @@ class StressTestRunner:
             gate_results = self._gate_evaluator.evaluate(run_dir)
             status = _aggregate_gate_status(gate_results)
         except Exception as exc:  # noqa: BLE001
+            emit_trace(
+                initializer="stress_runner",
+                task_title=f"stress: {scenario_name} seed={seed}",
+                run_id=run_id,
+                status="failed",
+                error=str(exc),
+                duration_s=time.monotonic() - t0,
+            )
             return ScenarioRunResult(
                 scenario_name=scenario_name,
                 seed=seed,
@@ -130,6 +141,14 @@ class StressTestRunner:
                 error=str(exc),
             )
 
+        emit_trace(
+            initializer="stress_runner",
+            task_title=f"stress: {scenario_name} seed={seed}",
+            run_id=run_id,
+            status="succeeded",
+            duration_s=time.monotonic() - t0,
+            artifacts=[str(run_dir)],
+        )
         return ScenarioRunResult(
             scenario_name=scenario_name,
             seed=seed,

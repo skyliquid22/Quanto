@@ -6,12 +6,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from monitoring.trace_emitter import emit_trace
 from research.experiments import (
     ExperimentRegistry,
     ExperimentSpec,
@@ -39,14 +41,31 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Failed to load experiment spec: {exc}", file=sys.stderr)
         return 1
     registry = ExperimentRegistry()
+    t0 = time.monotonic()
     try:
         result = run_experiment(spec, registry=registry, force=args.force)
     except ExperimentAlreadyExistsError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     except Exception as exc:  # pragma: no cover - runtime errors depend on environment
+        emit_trace(
+            initializer="run_experiment_cli",
+            task_title=f"experiment {spec.experiment_name}",
+            run_id=spec.experiment_id,
+            status="failed",
+            error=str(exc),
+            duration_s=time.monotonic() - t0,
+        )
         print(f"Experiment failed: {exc}", file=sys.stderr)
         return 3
+    emit_trace(
+        initializer="run_experiment_cli",
+        task_title=f"experiment {spec.experiment_name}",
+        run_id=result.experiment_id,
+        status="succeeded",
+        duration_s=time.monotonic() - t0,
+        artifacts=[str(result.metrics_path), str(result.rollout_artifact)],
+    )
     payload = {
         "experiment_id": result.experiment_id,
         "registry_path": str(result.registry_paths.root),
