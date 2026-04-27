@@ -16,14 +16,13 @@ from research.paper.config import (
 )
 
 
-class StubRunner:
-    """Minimal runner used for orchestrator tests."""
-
-    def __init__(self, config: PaperRunConfig, run_id: str, **_: object) -> None:
-        self.config = config
-        self.run_id = run_id
-        self.run_dir = Path(config.artifacts.output_root) / run_id
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+def _stub_execute_fn(run_id: str, scheduled_for: object, lifecycle: object) -> dict:
+    """Stub execute_fn that returns zero metrics without touching Alpaca or the registry."""
+    return {
+        "run_dir": "",
+        "metrics": {"pnl": 0.0, "exposure": 0.0, "turnover": 0.0, "fees": 0.0},
+        "run_id": run_id,
+    }
 
 
 def test_orchestrator_writes_summary(tmp_path, monkeypatch):
@@ -52,7 +51,7 @@ def test_orchestrator_writes_summary(tmp_path, monkeypatch):
     orchestrator = PaperRunOrchestrator(
         paper_config=config,
         ops_config=ops_config,
-        runner_factory=StubRunner,
+        execute_fn=_stub_execute_fn,
     )
     now = datetime(2024, 1, 2, 0, 5, tzinfo=timezone.utc)
     report = orchestrator.run(now=now)

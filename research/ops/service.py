@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from monitoring.trace_emitter import emit_trace
+from research.execution.alpaca_broker import AlpacaBrokerAdapter, AlpacaBrokerConfig
+from research.experiments.registry import ExperimentRegistry
 from research.ops.alerts import AlertEmitter
 from research.ops.config import OpsConfig
 from research.ops.lifecycle import RunLifecycleTracker
@@ -17,6 +20,9 @@ from research.ops.scheduler import MissedRun, PaperRunScheduler
 from research.paper.config import PaperRunConfig
 from research.paper.run import PaperRunner, derive_run_id
 from research.paper.summary import DailySummaryWriter
+from research.shadow.alpaca_live_data_source import AlpacaLiveDataSource
+from research.shadow.engine import ShadowEngine
+from research.shadow.logging import ShadowLogger
 
 
 def _ensure_datetime(value: datetime | None) -> datetime:
@@ -50,6 +56,8 @@ class PaperRunOrchestrator:
         alert_emitter: AlertEmitter | None = None,
         scheduler: PaperRunScheduler | None = None,
         data_root: Path | None = None,
+        execute_fn: Callable[..., dict[str, Any]] | None = None,
+        registry: "ExperimentRegistry | None" = None,
     ) -> None:
         self._paper_config = paper_config
         self._ops_config = ops_config
@@ -60,6 +68,8 @@ class PaperRunOrchestrator:
             ops_config.paper_trading,
             data_root=data_root,
         )
+        self._execute_fn = execute_fn
+        self._registry = registry
 
     def run(self, *, now: datetime | None = None) -> RunReport:
         current_time = _ensure_datetime(now)
@@ -153,20 +163,63 @@ class PaperRunOrchestrator:
         scheduled_for: datetime,
         lifecycle: RunLifecycleTracker,
     ) -> dict[str, Any]:
+        if self._execute_fn is not None:
+            return self._execute_fn(run_id, scheduled_for, lifecycle)
+
         runner = self._runner_factory(
             self._paper_config,
             run_id=run_id,
             scheduled_for=scheduled_for.isoformat(),
         )
-        lifecycle.update_metadata(run_dir=str(runner.run_dir))
-        # TODO: replace placeholders with real execution metrics once brokers expose them.
-        metrics = {
-            "pnl": 0.0,
-            "exposure": 0.0,
-            "turnover": 0.0,
-            "fees": 0.0,
-        }
-        return {"run_dir": str(runner.run_dir), "metrics": metrics, "run_id": run_id}
+        run_dir = runner.run_dir
+        lifecycle.update_metadata(run_dir=str(run_dir))
+
+        # Determine (or record) the date of the very first paper run invocation.
+        # This is used to build the growing calendar in AlpacaLiveDataSource.
+        meta = lifecycle._state.metadata
+        run_start_date_str: str | None = meta.get("run_start_date")
+        if run_start_date_str:
+            run_start_date = date.fromisoformat(run_start_date_str)
+        else:
+            run_start_date = scheduled_for.date()
+            lifecycle.update_metadata(run_start_date=run_start_date.isoformat())
+
+        # Load the experiment spec so the data source knows the feature set / symbols.
+        registry = ExperimentRegistry()
+        _, spec = registry.resolve_with_spec(self._paper_config.experiment_id)
+
+        # Build the live data source (fetches bars from Alpaca).
+        broker_config = AlpacaBrokerConfig.from_env()
+        data_source = AlpacaLiveDataSource(
+            spec=spec,
+            run_start_date=run_start_date,
+            api_key=broker_config.api_key,
+            secret_key=broker_config.secret_key,
+        )
+
+        # Build the shadow engine components.
+        state_store = runner.build_state_store()
+        logger = ShadowLogger(run_dir / "logs")
+        execution_options = runner.build_execution_options()
+
+        engine = ShadowEngine(
+            experiment_id=self._paper_config.experiment_id,
+            data_source=data_source,
+            state_store=state_store,
+            logger=logger,
+            run_id=run_id,
+            out_dir=run_dir,
+            execution_mode="alpaca_paper",
+            execution_options=execution_options,
+            live_mode=True,
+        )
+
+        summary = engine.run(max_steps=1)
+
+        # Extract real execution metrics written by the engine.
+        metrics = _read_execution_metrics(run_dir)
+
+        return {"run_dir": str(run_dir), "metrics": metrics, "run_id": run_id, "engine_summary": summary}
 
     def _write_summary(
         self,
@@ -210,6 +263,27 @@ class PaperRunOrchestrator:
                 context={"summary": payload},
                 runbook_url=self._ops_config.paper_trading.runbook_url,
             )
+
+
+def _read_execution_metrics(run_dir: Path) -> dict[str, Any]:
+    """Read execution_metrics.json written by ShadowEngine, return summary dict."""
+    metrics_path = run_dir / "execution_metrics.json"
+    if not metrics_path.exists():
+        return {"pnl": 0.0, "exposure": 0.0, "turnover": 0.0, "fees": 0.0}
+    try:
+        payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+        summary = payload.get("summary") or {}
+        return {
+            "pnl": float(summary.get("pnl", 0.0)),
+            "exposure": float(summary.get("exposure", 0.0)),
+            "turnover": float(summary.get("turnover_realized", 0.0)),
+            "fees": float(summary.get("total_fees", 0.0)),
+            "fill_rate": float(summary.get("fill_rate", 1.0)),
+            "reject_rate": float(summary.get("reject_rate", 0.0)),
+            "avg_slippage_bps": float(summary.get("avg_slippage_bps", 0.0)),
+        }
+    except Exception:
+        return {"pnl": 0.0, "exposure": 0.0, "turnover": 0.0, "fees": 0.0}
 
 
 __all__ = ["PaperRunOrchestrator", "RunReport"]
